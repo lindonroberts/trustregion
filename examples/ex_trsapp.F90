@@ -31,5 +31,6 @@ print *, "TRSAPP calculated step s ="
 print *, s
 print *, "crvmin = ", crvmin
 print *, "info =", info
+print *, "Note: global min is s=(-1, 0, 0)"
 
 end program ex_trsapp
