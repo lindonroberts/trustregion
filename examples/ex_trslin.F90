@@ -6,7 +6,7 @@
 program ex_trslin
 
 use, intrinsic :: iso_fortran_env, only : RP => REAL64
-use trustregion_mod, only : trslin
+use trustregion_mod, only : trslin, qdec
 
 implicit none
 
@@ -31,13 +31,26 @@ amat = 0.0
 do i = 1, n
     amat(i, i) = 1.0
     bvec(i) = su(i)
-    amat(i, 2*i) = -1.0
-    bvec(2*i) = -sl(i)
+    amat(i, n+i) = -1.0
+    bvec(n+i) = -sl(i)
 end do
 
 call trslin(amat, bvec, xbase, delta, g, hess, tol, s)
 
-print *, "TRSLIN calculated step s ="
+print *, "TRSLIN calculated original step s ="
 print *, s
+print *, "Model decrease = ", qdec(g, hess, s)
+
+! Replace final constraint xbase[3] + s[3] >= -10 (unused) with a constraint forcing the 
+! bound constraint solution s=[-0.5, 0, -0.5] to not be valid
+! Use -e * (xopt + s) <= -3, so since e * xopt = 3 this means s[1] + s[2] + s[3] >= 0
+amat(:, m) = -1.0
+bvec(m) = -3.0
+
+call trslin(amat, bvec, xbase, delta, g, hess, tol, s)
+
+print *, "TRSLIN calculated modified step s ="
+print *, s
+print *, "Model decrease = ", qdec(g, hess, s)
 
 end program ex_trslin

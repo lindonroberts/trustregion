@@ -127,6 +127,7 @@ if (DEBUGGING) then
     call assert(size(amat_in, 1) == n .and. size(amat_in, 2) == m, 'SIZE(AMAT) == [N, M]', srname)
     call assert(size(bvec_in) == m, 'SIZE(BVEC) == M', srname)
     call assert(size(xopt) == n, 'SIZE(XOPT) == N', srname)
+    call assert(size(g_in) == n, 'SIZE(G) == N', srname)
     call assert(size(hess_in, 1) == n .and. issymmetric(hess_in), 'HESS is n-by-n and symmetric', srname)
 end if
 

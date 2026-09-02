@@ -39,5 +39,12 @@ module trustregion_mod
             real(RP), intent(in) :: tol
             real(RP), intent(out) :: s(:)  ! S(N)
         end subroutine trslin
+
+        module function qdec(g, hess, s) result(dec)
+            real(RP), intent(in) :: g(:)  ! G(N)
+            real(RP), intent(in) :: hess(:, :)  ! HESS(N, N)
+            real(RP), intent(in) :: s(:)  ! S(N)
+            real(RP) :: dec
+        end function qdec
     end interface
 end module trustregion_mod

@@ -12,6 +12,7 @@ add_library (trustregion
   prima_common/string.F90
   prima_common/univar.F90
   getact.F90
+  qdec.F90
   trsapp.F90
   trsbox.F90
   trslin.F90
