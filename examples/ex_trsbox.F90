@@ -8,7 +8,7 @@
 !--------------------------------------------------------------------------------------------------!
 
 
-program ex_trsapp
+program ex_trsbox
 
 use, intrinsic :: iso_fortran_env, only : RP => REAL64
 use trustregion_mod, only : trsbox
@@ -33,4 +33,4 @@ print *, s
 print *, "crvmin = ", crvmin
 print *, "Note: global min (no box) is s=(-1, 0, 0)"
 
-end program ex_trsapp
+end program ex_trsbox

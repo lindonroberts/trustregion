@@ -29,21 +29,15 @@ module trustregion_mod
             real(RP), intent(out) :: d(:)  ! D(N)
         end subroutine trsbox
 
-        module subroutine trslin(amat, delta, gopt_in, hq_in, pq_in, rescon, tol, xpt, iact, nact, qfac, rfac, s, ngetact)
-            real(RP), intent(in) :: amat(:, :)  ! AMAT(N, M)
+        module subroutine trslin(amat_in, bvec_in, xopt, delta, g_in, hess_in, tol, s)
+            real(RP), intent(in) :: amat_in(:, :)  ! AMAT_IN(N, M)
+            real(RP), intent(in) :: bvec_in(:)  ! BVEC_IN(M)
+            real(RP), intent(in) :: xopt(:)  ! XOPT(N)
             real(RP), intent(in) :: delta
-            real(RP), intent(in) :: gopt_in(:)  ! GOPT_IN(N)
-            real(RP), intent(in) :: hq_in(:, :)  ! HQ_IN(N, N)
-            real(RP), intent(in) :: pq_in(:)  ! PQ_IN(NPT)
-            real(RP), intent(in) :: rescon(:)  ! RESCON(M)
+            real(RP), intent(in) :: g_in(:)  ! G_IN(N)
+            real(RP), intent(in) :: hess_in(:, :)  ! HESS_IN(N, N)
             real(RP), intent(in) :: tol
-            real(RP), intent(in) :: xpt(:, :)  ! XPT(N, NPT)
-            integer(IK), intent(inout) :: iact(:)  ! IACT(M); Will be updated in GETACT
-            integer(IK), intent(inout) :: nact  ! Will be updated in GETACT
-            real(RP), intent(inout) :: qfac(:, :)  ! QFAC(N, N); Will be updated in GETACT
-            real(RP), intent(inout) :: rfac(:, :)  ! RFAC(N, N); Will be updated in GETACT
             real(RP), intent(out) :: s(:)  ! S(N)
-            integer(IK), intent(out), optional :: ngetact
         end subroutine trslin
     end interface
 end module trustregion_mod

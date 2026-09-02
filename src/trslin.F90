@@ -19,14 +19,14 @@ implicit none
 contains
 
 
-subroutine trslin(amat, delta, gopt_in, hq_in, pq_in, rescon, tol, xpt, iact, nact, qfac, rfac, s, ngetact)
+subroutine trslin(amat_in, bvec_in, xopt, delta, g_in, hess_in, tol, s)
 !--------------------------------------------------------------------------------------------------!
 ! This subroutine solves
-!       minimize Q(XOPT + D)  s.t. ||D|| <= DELTA, AMAT^T*D <= B.
-! It is assumed that D = 0 is feasible, namely B >= 0 except for rounding errors. See Powell 2015
+!       minimize Q(XOPT + D)  s.t. ||D|| <= DELTA, AMAT^T*(XOPT+D) <= B.
+! It is assumed that D = 0 is feasible, namely AMAT^T * XOPT <= B except for rounding errors. See Powell 2015
 ! for details.
 !
-! AMAT, B, XPT, GOPT, HQ, PQ, NACT, IACT, RESCON, QFAC and RFAC are the same as the terms with these
+! AMAT, B, GOPT, and HESS are the same as the terms with these
 ! names in LINCOB.
 !
 ! S is the total calculated step so far from the trust region centre, its final value being given by
@@ -47,8 +47,7 @@ use, non_intrinsic :: consts_mod, only : RP, IK, ONE, ZERO, TWO, HALF, TEN, MAXP
 use, non_intrinsic :: debug_mod, only : assert
 use, non_intrinsic :: infnan_mod, only : is_finite, is_nan
 use, non_intrinsic :: linalg_mod, only : matprod, inprod, norm, solve, isorth, istriu, &
-    & issymmetric, trueloc
-use, non_intrinsic :: powalg_mod, only : hess_mul
+    & issymmetric, trueloc, matprod, eye, linspace
 
 ! Solver-specific modules
 use, non_intrinsic :: getact_mod, only : getact
@@ -56,93 +55,104 @@ use, non_intrinsic :: getact_mod, only : getact
 implicit none
 
 ! Inputs
-real(RP), intent(in) :: amat(:, :)  ! AMAT(N, M)
+real(RP), intent(in) :: amat_in(:, :)  ! AMAT_IN(N, M)
+real(RP), intent(in) :: bvec_in(:)  ! BVEC_IN(M)
+real(RP), intent(in) :: xopt(:)  ! XOPT(N)
 real(RP), intent(in) :: delta
-real(RP), intent(in) :: gopt_in(:)  ! GOPT_IN(N)
-real(RP), intent(in) :: hq_in(:, :)  ! HQ_IN(N, N)
-real(RP), intent(in) :: pq_in(:)  ! PQ_IN(NPT)
-real(RP), intent(in) :: rescon(:)  ! RESCON(M)
+real(RP), intent(in) :: g_in(:)  ! G_IN(N)
+real(RP), intent(in) :: hess_in(:, :)  ! HESS_IN(N, N)
 real(RP), intent(in) :: tol
-real(RP), intent(in) :: xpt(:, :)  ! XPT(N, NPT)
-
-! In-outputs
-integer(IK), intent(inout) :: iact(:)  ! IACT(M); Will be updated in GETACT
-integer(IK), intent(inout) :: nact  ! Will be updated in GETACT
-real(RP), intent(inout) :: qfac(:, :)  ! QFAC(N, N); Will be updated in GETACT
-real(RP), intent(inout) :: rfac(:, :)  ! RFAC(N, N); Will be updated in GETACT
 
 ! Outputs
 real(RP), intent(out) :: s(:)  ! S(N)
-integer(IK), intent(out), optional :: ngetact
 
 ! Local variables
 character(len=*), parameter :: srname = 'TRSLIN'
+integer(IK) :: iact(size(amat_in, 2))
 integer(IK) :: iter
 integer(IK) :: itercg
 integer(IK) :: jsav
 integer(IK) :: m
 integer(IK) :: maxiter
 integer(IK) :: n
-integer(IK) :: ngetact_loc
+integer(IK) :: nact
 integer(IK) :: npt
 logical :: newact
-real(RP) :: ad(size(amat, 2))
+real(RP) :: ad(size(amat_in, 2))
 real(RP) :: alpha
 real(RP) :: alphm
 real(RP) :: alpht
+real(RP) :: amat(size(amat_in, 1), size(amat_in, 2))
+real(RP) :: anorm(size(amat_in, 2))
 real(RP) :: beta
-real(RP) :: d(size(gopt_in))
+real(RP) :: bvec(size(amat_in, 2))
+real(RP) :: d(size(g_in))
 real(RP) :: dd
 real(RP) :: delsq
 real(RP) :: dg
 real(RP) :: dhd
-real(RP) :: dproj(size(gopt_in))
+real(RP) :: dproj(size(g_in))
 real(RP) :: ds
-real(RP) :: frac(size(amat, 2))
-real(RP) :: g(size(gopt_in))
+real(RP) :: frac(size(amat_in, 2))
+real(RP) :: g(size(g_in))
 real(RP) :: gamma
-real(RP) :: gopt(size(gopt_in))
-real(RP) :: hd(size(gopt_in))
-real(RP) :: hq(size(hq_in, 1), size(hq_in, 2))
+real(RP) :: gopt(size(g_in))
+real(RP) :: hd(size(g_in))
+real(RP) :: hess(size(hess_in, 1), size(hess_in, 2))
 real(RP) :: modscal
 real(RP) :: orthtol
-real(RP) :: pg(size(gopt_in))
-real(RP) :: pq(size(pq_in))
-real(RP) :: psd(size(gopt_in))
+real(RP) :: pg(size(g_in))
+real(RP) :: psd(size(g_in))
+real(RP) :: qfac(size(g_in), size(g_in))
 real(RP) :: reduct
-real(RP) :: resact(size(amat, 2))
+real(RP) :: resact(size(amat_in, 2))
+real(RP) :: rescon(size(amat_in, 2))
 real(RP) :: resid
-real(RP) :: resnew(size(amat, 2))
-real(RP) :: restmp(size(amat, 2))
+real(RP) :: resnew(size(amat_in, 2))
+real(RP) :: restmp(size(amat_in, 2))
+real(RP) :: rfac(size(g_in), size(g_in))
 real(RP) :: sold(size(s))
 real(RP) :: sqrtd
 real(RP) :: ss
 
 ! Sizes.
-m = int(size(amat, 2), kind(m))
-n = int(size(gopt_in), kind(n))
-npt = int(size(pq_in), kind(npt))
+m = int(size(amat_in, 2), kind(m))
+n = int(size(g_in), kind(n))
 
 ! Preconditions
 if (DEBUGGING) then
     call assert(m >= 0, 'M >= 0', srname)
-    call assert(n >= 1 .and. npt >= n + 2, 'N >= 1, NPT >= N + 2', srname)
+    call assert(n >= 1, 'N >= 1', srname)
     call assert(delta > 0, 'DELTA > 0', srname)
-    call assert(size(amat, 1) == n .and. size(amat, 2) == m, 'SIZE(AMAT) == [N, M]', srname)
-    call assert(size(hq_in, 1) == n .and. issymmetric(hq_in), 'HQ is n-by-n and symmetric', srname)
-    call assert(size(rescon) == m, 'SIZE(RESCON) == M', srname)
-    call assert(size(xpt, 1) == n .and. size(xpt, 2) == npt, 'SIZE(XPT) == [N, NPT]', srname)
-    call assert(all(is_finite(xpt)), 'XPT is finite', srname)
-    call assert(nact >= 0 .and. nact <= min(m, n), '0 <= NACT <= MIN(M, N)', srname)
-    call assert(size(iact) == m, 'SIZE(IACT) == M', srname)
-    call assert(all(iact(1:nact) >= 1 .and. iact(1:nact) <= m), '1 <= IACT <= M', srname)
-    call assert(size(qfac, 1) == n .and. size(qfac, 2) == n, 'SIZE(QFAC) == [N, N]', srname)
-    orthtol = max(TEN**max(-10, -MAXPOW10), min(1.0E-1_RP, TEN**min(8, MAXPOW10) * EPS * real(n, RP)))
-    call assert(isorth(qfac, orthtol), 'QFAC is orthogonal', srname)
-    call assert(size(rfac, 1) == n .and. size(rfac, 2) == n, 'SIZE(RFAC) == [N, N]', srname)
-    call assert(istriu(rfac), 'RFAC is upper triangular', srname)
-    call assert(size(qfac, 1) == n .and. size(qfac, 2) == n, 'SIZE(QFAC) == [N, N]', srname)
+    call assert(size(amat_in, 1) == n .and. size(amat_in, 2) == m, 'SIZE(AMAT) == [N, M]', srname)
+    call assert(size(bvec_in) == m, 'SIZE(BVEC) == M', srname)
+    call assert(size(xopt) == n, 'SIZE(XOPT) == N', srname)
+    call assert(size(hess_in, 1) == n .and. issymmetric(hess_in), 'HESS is n-by-n and symmetric', srname)
 end if
+
+!===============!
+! Preprocessing !
+!===============!
+! Normalize the linear constraints so that each constraint has a gradient of norm 1.
+! getact assumes this
+anorm = sqrt(sum(amat_in**2, dim=1))
+amat = amat_in / spread(anorm, dim=1, ncopies=n)
+bvec = bvec_in / anorm
+
+! RESCON holds information about the constraint residuals at the current trust region center XOPT.
+!   1. If if B(J) - AMAT(:, J)^T*XOPT <= DELTA, then RESCON(J) = B(J) - AMAT(:, J)^T*XOPT. Note that
+!   RESCON >= 0 in this case, because the algorithm keeps XOPT to be feasible.
+!   2. Otherwise, RESCON(J) is a negative value that B(J) - AMAT(:,J)^T*XOPT >= |RESCON(J)| >= DELTA.
+!   RESCON can be updated without calculating the constraints that are far from being active, so
+!   that we only need to evaluate the constraints that are nearly active.
+rescon = max(bvec - matprod(xopt, amat), ZERO)
+rescon(trueloc(rescon >= delta)) = -rescon(trueloc(rescon >= delta))
+
+! Set some more initial values.
+qfac = eye(n)
+rfac = ZERO
+nact = 0
+iact = linspace(1_IK, m, m)
 
 !====================!
 ! Calculation starts !
@@ -152,23 +162,18 @@ end if
 ! Note that the trust-region step is scale invariant.
 ! N.B.: It is faster and safer to scale by multiplying a reciprocal than by division. See
 ! https://fortran-lang.discourse.group/t/ifort-ifort-2021-8-0-1-0e-37-1-0e-38-0/
-if (maxval(abs(gopt_in)) > 1.0E12) then   ! The threshold is empirical.
-    modscal = max(TWO * REALMIN, ONE / maxval(abs(gopt_in)))  ! MAX: precaution against underflow.
-    gopt = gopt_in * modscal
-    pq = pq_in * modscal
-    hq = hq_in * modscal
+if (maxval(abs(g_in)) > 1.0E12) then   ! The threshold is empirical.
+    modscal = max(TWO * REALMIN, ONE / maxval(abs(g_in)))  ! MAX: precaution against underflow.
+    gopt = g_in * modscal
+    hess = hess_in * modscal
 else
-    gopt = gopt_in
-    pq = pq_in
-    hq = hq_in
+    gopt = g_in
+    hess = hess_in
 end if
 
 ! Return if G is not finite. Otherwise, GETACT will fail in the debugging mode.
 if (.not. is_finite(sum(abs(gopt)))) then
     s = ZERO
-    if (present(ngetact)) then
-        ngetact = 0
-    end if
     return
 end if
 
@@ -203,7 +208,6 @@ delsq = delta * delta
 s = ZERO
 ss = ZERO
 reduct = ZERO
-ngetact_loc = 0
 newact = .true.
 
 ! ITERCG is the number of CG iterations corresponding to the current "active set" obtained by
@@ -225,7 +229,6 @@ do iter = 1, maxiter  ! Powell's code is essentially a DO WHILE loop. We impose 
         ! reduces the values of the nearly active constraints; it changes the inactive constraints
         ! by at most 0.2*DELTA, but the residuals of these constraints at no less than 0.2*DELTA.
         ! N.B.: The magic number 0.2 appears also in GETACT (TDEL = 0.2_RP * DELTA). It works well.
-        ngetact_loc = ngetact_loc + 1_IK
         call getact(amat, delta, g, iact, nact, qfac, resact, resnew, rfac, psd)
         dd = inprod(psd, psd)
         if (dd <= EPS * delsq .or. is_nan(dd)) then  ! Powell's code: IF (DD <= 0) THEN
@@ -338,7 +341,7 @@ do iter = 1, maxiter  ! Powell's code is essentially a DO WHILE loop. We impose 
 
     ! Set DHD to the curvature of the model along D. Then reduce ALPHA if necessary to the value
     ! that minimizes the model.
-    hd = hess_mul(d, xpt, pq, hq)
+    hd = matprod(hess, d)
     dhd = inprod(d, hd)
     alpht = alpha
     if (dg + alpha * dhd > 0) then
@@ -476,10 +479,6 @@ do iter = 1, maxiter  ! Powell's code is essentially a DO WHILE loop. We impose 
     d = -pg + beta * d
 end do
 
-if (present(ngetact)) then
-    ngetact = ngetact_loc
-end if
-
 !====================!
 !  Calculation ends  !
 !====================!
@@ -489,14 +488,6 @@ if (DEBUGGING) then
     call assert(size(s) == n .and. all(is_finite(s)), 'SIZE(S) == N, S is finite', srname)
     ! Due to rounding, it may happen that ||S|| > DELTA, but ||S|| > 2*DELTA is highly improbable.
     call assert(norm(s) <= TWO * delta, '||S|| <= 2*DELTA', srname)
-    call assert(nact >= 0 .and. nact <= min(m, n), '0 <= NACT <= MIN(M, N)', srname)
-    call assert(size(qfac, 1) == n .and. size(qfac, 2) == n, 'SIZE(QFAC) == [N, N]', srname)
-    call assert(isorth(qfac, orthtol), 'QFAC is orthogonal', srname)
-    call assert(size(rfac, 1) == n .and. size(rfac, 2) == n, 'SIZE(RFAC) == [N, N]', srname)
-    call assert(istriu(rfac), 'RFAC is upper triangular', srname)
-    if (present(ngetact)) then
-        call assert(ngetact >= 1, 'NGETACT >= 1', srname)
-    end if
 end if
 
 end subroutine trslin
