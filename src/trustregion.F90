@@ -28,5 +28,22 @@ module trustregion_mod
             real(RP), intent(out) :: crvmin
             real(RP), intent(out) :: d(:)  ! D(N)
         end subroutine trsbox
+
+        module subroutine trslin(amat, delta, gopt_in, hq_in, pq_in, rescon, tol, xpt, iact, nact, qfac, rfac, s, ngetact)
+            real(RP), intent(in) :: amat(:, :)  ! AMAT(N, M)
+            real(RP), intent(in) :: delta
+            real(RP), intent(in) :: gopt_in(:)  ! GOPT_IN(N)
+            real(RP), intent(in) :: hq_in(:, :)  ! HQ_IN(N, N)
+            real(RP), intent(in) :: pq_in(:)  ! PQ_IN(NPT)
+            real(RP), intent(in) :: rescon(:)  ! RESCON(M)
+            real(RP), intent(in) :: tol
+            real(RP), intent(in) :: xpt(:, :)  ! XPT(N, NPT)
+            integer(IK), intent(inout) :: iact(:)  ! IACT(M); Will be updated in GETACT
+            integer(IK), intent(inout) :: nact  ! Will be updated in GETACT
+            real(RP), intent(inout) :: qfac(:, :)  ! QFAC(N, N); Will be updated in GETACT
+            real(RP), intent(inout) :: rfac(:, :)  ! RFAC(N, N); Will be updated in GETACT
+            real(RP), intent(out) :: s(:)  ! S(N)
+            integer(IK), intent(out), optional :: ngetact
+        end subroutine trslin
     end interface
 end module trustregion_mod
