@@ -1,4 +1,4 @@
-module trsapp_mod
+submodule (trustregion_mod) trsapp_mod
 !--------------------------------------------------------------------------------------------------!
 ! This module provides subroutines concerning the trust-region calculations of NEWUOA.
 !
@@ -12,8 +12,6 @@ module trsapp_mod
 !--------------------------------------------------------------------------------------------------!
 
 implicit none
-private
-public :: trsapp
 
 contains
 
@@ -459,4 +457,4 @@ f = (args(1) + args(2) * cth) * cth + (args(3) + args(4) * cth) * sth
 end function circle_fun_trsapp
 
 
-end module trsapp_mod
+end submodule trsapp_mod

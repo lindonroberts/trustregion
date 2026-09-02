@@ -1,4 +1,4 @@
-module trsbox_mod
+submodule (trustregion_mod) trsbox_mod
 !--------------------------------------------------------------------------------------------------!
 ! This module provides subroutines concerning the trust-region calculations of BOBYQA.
 !
@@ -12,9 +12,6 @@ module trsbox_mod
 !--------------------------------------------------------------------------------------------------!
 
 implicit none
-private
-public :: trsbox
-
 
 contains
 
@@ -620,4 +617,4 @@ end if
 !====================!
 end function interval_fun_trsbox
 
-end module trsbox_mod
+end submodule trsbox_mod

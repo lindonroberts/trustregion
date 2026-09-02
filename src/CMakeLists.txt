@@ -13,6 +13,7 @@ add_library (trustregion
   prima_common/univar.F90
   trsapp.F90
   trsbox.F90
+  trustregion.F90
 )
 
 set (PRIMA_REAL_PRECISION "64" CACHE STRING "real precision")
