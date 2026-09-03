@@ -46,5 +46,26 @@ dec = -inprod(g, s) - HALF * inprod(s, hs)
 
 end function qdec
 
+function crdec(g, hess, s, delta) result(dec)
+!--------------------------------------------------------------------------------------------------!
+! This function calculates the cubic regularization model decrease
+!--------------------------------------------------------------------------------------------------!
+
+! Common modules
+use, non_intrinsic :: consts_mod, only : RP
+
+implicit none
+
+! Inputs
+real(RP), intent(in) :: g(:)  ! G(N)
+real(RP), intent(in) :: hess(:, :)  ! HESS(N, N)
+real(RP), intent(in) :: s(:)  ! S(N)
+real (RP), intent(in) :: delta
+real(RP) :: dec
+
+dec = qdec(g, hess, s) - (delta / 3.0) * sqrt(sum(s**2))**3
+
+end function qdec
+
 
 end submodule qdec_mod
