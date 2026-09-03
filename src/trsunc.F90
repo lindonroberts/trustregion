@@ -870,6 +870,23 @@ end subroutine quadroots
 
 
 subroutine cubicroots(p0, p1, p2, p3, x1, x2, x3, nroots)
+	! ------------------------------------------------------------------------------------------- !
+	! Find the real roots x1 <= x2 <= x3 to the cubic equation p0*x^3 + p1*x^2 + p2*x + p3 = 0,
+	! and return the number of real roots.
+	! 
+	! If any repeated roots are found, these are all returned.
+	! 
+	! If all p0=p1=p2=p3=0, then returns 0 and leaves x1,x2,x3 unchanged.
+	! 
+	! Based on function CUBICROOTS, from
+	! T. R. F. Nonweiler. Algorithm 326: Roots of Low-Order Polynomial Equations
+	! Communications of the ACM, 11:4 (1968), pp. 269-270.
+	! https://dl.acm.org/doi/10.1145/362991.363039
+	! 
+	! Computed solutions are refined using 1 iteration of Newton's method 
+	! (an idea used in GALAHAD/roots.f90)
+	! ------------------------------------------------------------------------------------------- !
+	
     ! Common modules
     use, non_intrinsic :: consts_mod, only : RP, IK, HALF, ZERO
 
