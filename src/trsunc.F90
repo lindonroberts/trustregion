@@ -560,134 +560,438 @@ subroutine initlda(const SymmetricMatrix& H, const Vector& g, const Number delta
 	if (lambdaU > 0) lambdaU += std::max(expand_interval_thresh, expand_interval_thresh * lambdaU);
 end subroutine initlda
 
-subroutine solvekkt(const SymmetricMatrix& H, const Vector& g, 
-	const Number lambdaC, Vector& x, Number& dval)
-	H_plus_lambda_I.copy_from(H);  ! H_plus_lambda_I <-- copy(H)
-	H_plus_lambda_I.add_multiple_identity(lambdaC);  ! H_plus_lambda_I += lambdaC*I
-	Index status = H_plus_lambda_I.cholesky_factorize_inplace_safe(x, dval);
-	if (status == 0)
-	{
+subroutine solvekkt(H, g, lambdaC, x, dval, status)
+	! Common modules
+    use, non_intrinsic :: consts_mod, only : RP, IK, ONE, DEBUGGING
+    use, non_intrinsic :: debug_mod, only : assert
+    use, non_intrinsic :: linalg_mod, only : issymmetric
+
+	implicit none
+
+	! Inputs
+	real(RP), intent(in) :: H(:,:)  ! H(N,N)
+	real(RP), intent(in) :: g(:)  ! G(N)
+	real(RP), intent(in) :: lambdaC
+
+	! Outputs
+	real(RP), intent(out) :: x(:)  ! x(N)
+	real(RP), intent(out) :: dval
+	logical, intent(out) :: status
+
+	! Locals
+	character(len=*), parameter :: srname = 'SOLVEKKT'
+	int(IP) :: i
+	int(IP) :: n
+	int(IP) :: cholstatus
+	real(RP) :: H_plus_lambda_I(size(H,1), size(H,2))
+
+	! Sizes.
+    n = int(size(g), kind(n))
+
+    ! Preconditions
+    if (DEBUGGING) then
+        call assert(n >= 1, 'N >= 1', srname)
+        call assert(size(g) == n, 'SIZE(G) == N', srname)
+        call assert(size(H, 1) == n .and. issymmetric(H), 'HESS is n-by-n and symmetric', srname)
+        call assert(size(x) == n, 'SIZE(X) == N', srname)
+    end if
+
+	H_plus_lambda_I = H 
+	do i = 1, n 
+		H_plus_lambda_I(i, i) += lambdaC
+	end do
+
+	call cholsafe(H_plus_lambda_I, x, dval, cholstatus)
+	
+	if (cholstatus == 0) then
 		! H + lambdaC*I was positive definite: solve (H + lambdaC*I) * x = -g
-		x.copy_from(g);  ! x <-- copy(g)
-		x.scale(-1.0);  ! x *= -1
-		H_plus_lambda_I.cholesky_solve(x);
-	}
-	return status;
+
+		x = -ONE * g
+		cholsolve(H_plus_lambda_I, x)
+		status = .true.
+	else
+		status = .false.
+	end if
 end subroutine solvekkt
 
-subroutine pi3(const Vector& x_lambda, Number& pi, 
-	Number& d1pi, Number& d2pi, Number& d3pi)
-	pi = x_lambda.sqnorm2(); ! zero-th deriv is just pi(lambda) = ||x(lambda)||^2
+subroutine cholsafe(A, v, delta, status)
+	! --------------------------------------------------------------- !
+	! Safe in-place Cholesky factorization: A = L * L^T
+	! 
+	! Overwrites the upper and lower triangular parts of the matrix with L
+	! (so that A remains symmetric, which makes cholsolve easier)
+	! 
+	! Outputs of this function are:
+	! - v = vector of length n, updated if A is not positive definite
+	! - delta = value updated if A is not positive definite
+	! 
+	! Return value 'status' is
+	! - 0 = successful, A is positive definite [v, delta unchanged]
+	! - Positive = leading minor of order (output value) is not 
+	!              positive definite [v, delta changed]
+	! 
+	! If A is not positive definite (i.e. return value > 0), then v 
+	! and delta are set so that v is a nonzero vector such that 
+	!     v.T * (A + delta * ek * ek.T) * v = 0,
+	! where k is the iteration when failure occurs.
+	! --------------------------------------------------------------- !
+	! Common modules
+    use, non_intrinsic :: consts_mod, only : RP, IK, ZERO, ONE, DEBUGGING
+    use, non_intrinsic :: debug_mod, only : assert
+    use, non_intrinsic :: linalg_mod, only : issymmetric
 
-	const Number alpha0 = 1.0;
-	const Number alpha1 = 6.0;
+	implicit none
 
-	x1.copy_from(x_lambda);  ! x1 <-- copy(x_lambda)
-	x1.scale(-1.0);  ! x1 *= -1
-	H_plus_lambda_I.cholesky_solve(x1);  ! x1 <-- (H+lambda*I) \ x1 = -1 * (H+lambda*I) \ x_lambda
-	x2.copy_from(x1);  ! x2 <-- copy(x1)
-	x2.scale(-2.0);  ! x2 *= -2
-	H_plus_lambda_I.cholesky_solve(x2);  ! x2 <-- (H+lambda*I) \ x2 = -2 * (H+lambda*I) \ x1
+	! Inputs/outputs
+	real(RP), intent(inout) :: A(:,:)  ! A(N,N)
+	real(RP), intent(out) :: v(:)  ! V(N)
+	real(RP), intent(out) :: delta
+	int(IP), intent(out) :: status
 
-	d1pi = 2.0 * alpha0 * dot(x_lambda, x1); ! pi'(lambda) = 2*alpha0 * dot(x_lambda, x1)
-	d2pi = alpha1 * x1.sqnorm2(); ! pi''(lambda) = alpha1 * ||x1||^2
-	d3pi = 2.0 * alpha1 * dot(x1, x2); ! pi'''(lambda) = 2*alpha1 * dot(x1, x2)
+	! Locals
+	character(len=*), parameter :: srname = 'CHOLSAFE'
+	int(IP) :: i, j, k, l
+	int(IP) :: n
+	real(RP) :: Lkk, sqrt_Lkk
+	real(RP) :: adiag(size(A, 1))  ! adiag(N)
+
+	! Sizes.
+    n = int(size(A, 1), kind(n))
+
+	! Preconditions
+    if (DEBUGGING) then
+        call assert(n >= 1, 'N >= 1', srname)
+        call assert(size(A, 1) == n .and. issymmetric(A), 'A is n-by-n and symmetric', srname)
+		call assert(size(v) == n, 'SIZE(V) == N', srname)
+    end if
+
+	! Same as cholesky_factorize_inplace() but with safety features from
+	! Section 7.3.7 of Conn, Gould, Toint, Trust-Region Methods, SIAM (2000)
+	
+	! Save diag(A) in VTMP, as we will need these values to compute delta if failure
+	do i = 1, n 
+		adiag(i) = A(i, i)
+	end do
+
+	do k = 1, n
+		if (A(k, k) <= ZERO) then
+			! A is not positive definite!
+			status = k
+
+			! delta = np.sum(L[k, :k] ** 2) - A[k, k]
+			! v = np.zeros((n,))
+			! v[k] = 1.0
+			! for j in range(k-1, -1, -1):  # j = k-1, k-2, ..., 0
+			!     v[j] = -np.sum(L[j + 1:k+1, j] * v[j + 1:k+1]) / L[j, j]
+			do j = n, 1, -1
+				if (j > k) then
+					v(j) = ZERO
+				else if (j == k) then
+					v(j) = ONE
+				else
+					v(j) = ZERO
+					do l = j + 1, k
+						v(j) = v(j) - A(l, j) * v(l)
+					end do
+					v(j) /= A(j, j)
+				end if
+			end do
+			delta = -adiag(k)
+			do j = 1, k
+				delta = delta + A(k, j) * A(k, j)
+			end do
+
+			break
+		else
+			Lkk = A(k, k);
+			sqrt_Lkk = sqrt(Lkk)
+			do j=k + 1, n
+				! A[j:, j] = A[j:, j] - A[j:, k] * A[j, k] / A[k, k]
+				A(j:n, j) = A(j:n, j) - A(j:n, k) * A(j, k) / Lkk
+			end do
+			! A[k:, k] = A[k:, k] / sqrt(A[k, k]);
+			! Need to define sqrt_Lkk early since L(k,k) is updated in this loop
+			A(k:n, k) = A(k:, k) / sqrt_Lkk
+		end if
+	end do
+end subroutine cholsafe
+
+subroutine cholsolve(A, x)
+	! --------------------------------------------------------------- !
+	! Solve using Cholesky factorization: x <-- A \ x
+	! 
+	! Since A is symmetric, no difference between A \ x and A^T \ x
+	! --------------------------------------------------------------- !
+	! Common modules
+    use, non_intrinsic :: consts_mod, only : RP, IK, ONE, DEBUGGING
+    use, non_intrinsic :: debug_mod, only : assert
+    use, non_intrinsic :: linalg_mod, only : issymmetric
+
+	implicit none
+
+	! Inputs/outputs
+	real(RP), intent(in) :: A(:,:)  ! A(N,N)
+	real(RP), intent(inout) :: x(:)  ! X(N)
+
+	! Locals
+	character(len=*), parameter :: srname = 'CHOLSOLVE'
+	int(IP) :: j, k
+	int(IP) :: n
+
+	! Sizes.
+    n = int(size(A, 1), kind(n))
+
+	! Preconditions
+    if (DEBUGGING) then
+        call assert(n >= 1, 'N >= 1', srname)
+        call assert(size(A, 1) == n .and. issymmetric(A), 'A is n-by-n and symmetric', srname)
+		call assert(size(x) == n, 'SIZE(X) == N', srname)
+    end if
+
+	solve_lower(x, false);  ! solve L * y = b
+	! solve_lower --> solve_triangular(x, true, unit_diagonal, false);
+	x[0] /= _data[0];  ! _data[0] = _data[_ncols * 0 + 0];
+			for (Index j = 1; j < n; ++j)
+			{
+				for (Index k = j; k-- > 0; )  ! k = j-1, ..., 0
+					x[j] -= x[k] * _data[_ncols * j + k];
+				x[j] /= _data[_ncols * j + j];
+			}
+
+	
+	solve_lower_trans(x, false);  ! solve L^T * x = y
+	! solve_lower_trans --> solve_triangular(x, true, unit_diagonal, true);
+	x[n - 1] /= _data[_ncols * (n - 1) + n - 1];
+			for (Index j = n - 1; j-- > 0; )  ! j = n-2, ..., 0
+			{
+				for (Index k = j + 1; k < n; ++k)
+					x[j] -= x[k] * _data[_ncols * k + j];
+				x[j] /= _data[_ncols * j + j];
+			}
+	
+end subroutine cholsolve
+
+subroutine pi3(x_lambda, pi, d1pi, d2pi, d3pi)
+	! Common modules
+    use, non_intrinsic :: consts_mod, only : RP, IK, HALF, TWO, ONE
+
+    implicit none
+
+	! Inputs
+	real(RP), intent(in) :: x_lambda(:)  ! x_lambda(N)
+	
+	! Outputs
+	real(RP), intent(out) :: pi
+	real(RP), intent(out) :: d1pi
+	real(RP), intent(out) :: d2pi
+	real(RP), intent(out) :: d3pi
+
+	! Locals
+	integer(IK) :: n
+	real(RP), parameter :: alpha0 = ONE
+	real(RP), parameter :: alpha1 = 6.0
+    real(RP) :: x1(size(x_lambda))
+	real(RP) :: x2(size(x_lambda))
+
+    ! Sizes.
+    n = int(size(x_lambda), kind(n))
+
+	! zero-th deriv is just pi(lambda) = ||x(lambda)||^2
+	pi = sum(x_lambda**2) 
+
+	! x1 <-- (H+lambda*I) \ x1 = -1 * (H+lambda*I) \ x_lambda
+	x1 = -x_lambda
+	H_plus_lambda_I.cholesky_solve(x1)
+
+	! x2 <-- (H+lambda*I) \ x2 = -2 * (H+lambda*I) \ x1
+	x2 = -TWO * x1
+	H_plus_lambda_I.cholesky_solve(x2)
+
+	! pi'(lambda) = 2*alpha0 * dot(x_lambda, x1)
+	d1pi = TWO * alpha0 * inprod(x_lambda, x1)
+	! pi''(lambda) = alpha1 * ||x1||^2
+	d2pi = alpha1 * sum(x1**2) 
+	! pi'''(lambda) = 2*alpha1 * dot(x1, x2)
+	d3pi = TWO * alpha1 * inprod(x1, x2) 
 endsubroutine pi3
 
-subroutine pi3beta(const Vector& x_lambda, const Number beta, 
-	Number& pi_beta, Number& d1pi_beta, Number& d2pi_beta, Number& d3pi_beta)
-	Number pi, d1pi, d2pi, d3pi;
-	Number half_beta = 0.5 * beta;
-	pi_three_derivs(x_lambda, pi, d1pi, d2pi, d3pi);
-	pi_beta = std::pow(pi, half_beta);
-	d1pi_beta = half_beta * std::pow(pi, half_beta - 1) * d1pi;
-	d2pi_beta = half_beta * std::pow(pi, half_beta - 1) * d2pi
-		+ half_beta * (half_beta - 1) * std::pow(pi, half_beta - 2) * std::pow(d1pi, 2);
-	d3pi_beta = std::pow(pi, 2) * d3pi + 3 * (half_beta - 1) * pi * d1pi * d2pi
-		+ (half_beta - 1) * (half_beta - 2) * std::pow(d1pi, 3);
-	d3pi_beta *= half_beta * std::pow(pi, half_beta - 3);
+subroutine pi3beta(x_lambda, beta, pi_beta, d1pi_beta, d2pi_beta, d3pi_beta)
+	! Common modules
+    use, non_intrinsic :: consts_mod, only : RP, IK, HALF, TWO, ONE
+
+    implicit none
+
+	! Inputs
+	real(RP), intent(in) :: x_lambda(:)  ! x_lambda(N)
+	real(RP), intent(in) :: beta
+	
+	! Outputs
+	real(RP), intent(out) :: pi_beta
+	real(RP), intent(out) :: d1pi_beta
+	real(RP), intent(out) :: d2pi_beta
+	real(RP), intent(out) :: d3pi_beta
+
+	! Locals
+	real(RP) :: pi, d1pi, d2pi, d3pi
+	real(RP) :: half_beta = HALF * beta
+
+	call pi3(x_lambda, pi, d1pi, d2pi, d3pi)
+
+	pi_beta = pi ** half_beta
+	d1pi_beta = half_beta * (pi ** (half_beta - ONE)) * d1pi
+	d2pi_beta = half_beta * (pi ** (half_beta - ONE)) * d2pi
+		+ half_beta * (half_beta - ONE) * (pi**(half_beta-TWO)) * (d1pi**2)
+	d3pi_beta = (pi**2) * d3pi + 3.0 * (half_beta - ONE) * pi * d1pi * d2pi
+		+ (half_beta - ONE) * (half_beta - TWO) * (d1pi**3)
+	d3pi_beta *= half_beta * (pi**(half_beta-3.0))
+
 end subroutine pi3beta
 
-subroutine newlda(const Vector& x_lambda, const Number lambdaC, 
-	const Number delta, const Number beta, const Index k, Number& new_lambda, const bool is_tr)
+subroutine newlda(x_lambda, lambdaC, delta, beta, k, new_lambda, is_tr, status)
+	! Common modules
+    use, non_intrinsic :: consts_mod, only : RP, IK, HALF, ONE, TWO, DEBUGGING
+    use, non_intrinsic :: debug_mod, only : assert
+
+	implicit none
+
+	! Inputs
+	real(RP), intent(in) :: x_lambda(:)  ! X_LAMBDA(N)
+	real(RP), intent(in) :: lambdaC
+	real(RP), intent(in) :: delta
+	real(RP), intent(in) :: beta
+	int(IP), intent(in) :: k
+	logical, intent(in) :: is_tr
+
+	! Outputs
+	real(RP), intent(out) :: new_lambda
+	logical, intent(out) :: status
+
+	! Locals
+	real(RP) :: pi_beta, d1pi_beta, d2pi_beta, d3pi_beta
+	real(RP) :: sq_delta
+	real(RP) :: d1, d2, d3
+	int(IP) :: nroots
+
 	! Check for valid combinations of (beta,k)
-	if (k < 1 || k > 3 || beta == 0.0) return -1;
-	if (!is_tr)
-		if (!(beta == -1.0 && k == 1) && !(beta == 2.0 && k == 2) && !(beta == 2.0 && k == 3)) return -1;
+	status = .true.
+	if (k < 1 .or. k > 3 .or. beta == ZERO) then
+		status = .false.
+	else if (.not. is_tr) then
+		! ARC only implements specific combinations
+		if (.not. (beta == -ONE .and. k == 1) .and. .not. (beta == TWO .and. k == 2) .and. .not. (beta == TWO .and. k == 3)) then
+			status = .false.
+		end if
+	end if
+	
+	if (status) then
+		sq_delta = delta * delta
+		call pi3beta(x_lambda, beta, pi_beta, d1pi_beta, d2pi_beta, d3pi_beta)
 
-	Number pi_beta, d1pi_beta, d2pi_beta, d3pi_beta;
-	Number sq_delta = delta * delta;
-	pi_three_derivs_with_beta(x_lambda, beta, pi_beta, d1pi_beta, d2pi_beta, d3pi_beta);
-
-	Number d1, d2, d3;
-	Index nroots;
-
-	if (k == 1)
-	{
-		! For (TRS), solve: pi_beta + d1pi_beta*d - delta^beta = 0
-		!
-		! For (ARC), then have beta=-1, and solve
-		!    pi_beta + d1pi_beta*d - (lambdaC+d)^(-1) / delta^(-1) = 0
-		! or
-		!    d1pi_beta * d^2 + (pi_beta + d1pi_beta*lambdaC) * d + (lambdaC*pi_beta - delta) = 0
-		if (is_tr)
-			nroots = cubic_roots(0.0, 0.0, d1pi_beta, pi_beta - std::pow(delta, beta), d1, d2, d3);
+		if (k == 1) then
+			! For (TRS), solve: pi_beta + d1pi_beta*d - delta^beta = 0
+			!
+			! For (ARC), then have beta=-1, and solve
+			!    pi_beta + d1pi_beta*d - (lambdaC+d)^(-1) / delta^(-1) = 0
+			! or
+			!    d1pi_beta * d^2 + (pi_beta + d1pi_beta*lambdaC) * d + (lambdaC*pi_beta - delta) = 0
+			if (is_tr) then
+				call cubicroots(ZERO, ZERO, d1pi_beta, pi_beta - std::pow(delta, beta), d1, d2, d3, nroots)
+			else
+				call cubicroots(ZERO, d1pi_beta, pi_beta + d1pi_beta * lambdaC, lambdaC * pi_beta - delta, d1, d2, d3, nroots)
+			end if
+		else if (k == 2)
+			! For (TRS), solve: pi_beta + d1pi_beta*d + 0.5*d2pi_beta * d^2 - delta^beta = 0
+			!
+			! For (ARC), then have beta=2, so solve:
+			!   pi_beta + d1pi_beta*d + 0.5*d2pi_beta * d^2 - (lambdaC+d)^2 / delta^2 = 0
+			! or
+			!   (pi_beta - lambdaC^2 / delta^2) + (d1pi_beta - 2*lambdaC/delta^2) * d + (0.5*d2pi_beta - 1/delta^2) * d^2 = 0
+			if (is_tr) then
+				call cubicroots(ZERO, HALF * d2pi_beta, d1pi_beta, pi_beta - std::pow(delta, beta), d1, d2, d3, nroots)
+			else
+				call cubicroots(ZERO, HALF * d2pi_beta - ONE / (sq_delta), d1pi_beta - TWO * lambdaC / sq_delta, pi_beta - lambdaC * lambdaC / sq_delta, d1, d2, d3, nroots)
+			end if
 		else
-			nroots = cubic_roots(0.0, d1pi_beta, pi_beta + d1pi_beta * lambdaC, lambdaC * pi_beta - delta, d1, d2, d3);
-	}
-	else if (k == 2)
-	{
-		! For (TRS), solve: pi_beta + d1pi_beta*d + 0.5*d2pi_beta * d^2 - delta^beta = 0
-		!
-		! For (ARC), then have beta=2, so solve:
-		!   pi_beta + d1pi_beta*d + 0.5*d2pi_beta * d^2 - (lambdaC+d)^2 / delta^2 = 0
-		! or
-		!   (pi_beta - lambdaC^2 / delta^2) + (d1pi_beta - 2*lambdaC/delta^2) * d + (0.5*d2pi_beta - 1/delta^2) * d^2 = 0
-		if (is_tr)
-			nroots = cubic_roots(0.0, 0.5 * d2pi_beta, d1pi_beta, pi_beta - std::pow(delta, beta), d1, d2, d3);
-		else
-			nroots = cubic_roots(0.0, 0.5 * d2pi_beta - 1.0 / (sq_delta), d1pi_beta - 2.0 * lambdaC / sq_delta, pi_beta - lambdaC * lambdaC / sq_delta, d1, d2, d3);
-	}
-	else
-	{
-		! For (TRS), solve: pi_beta + d1pi_beta*d + 0.5*d2pi_beta * d^2 + (1/6) * d3pi_beta * d^3 - delta^beta = 0
-		!
-		! For (ARC), then have beta=2, so solve:
-		!     pi_beta + d1pi_beta*d + 0.5*d2pi_beta * d^2 + (1/6) * d3pi_beta * d^3 - (lambdaC+d)^2 / delta^2 = 0
-		! or
-		!     (pi_beta - lambdaC^2 / delta^2) + (d1pi_beta - 2*lambdaC/delta^2) * d + (0.5*d2pi_beta - 1/delta^2) * d^2 + (1/6) * d3pi_beta * d^3 = 0
-		if (is_tr)
-			nroots = cubic_roots(d3pi_beta / 6.0, 0.5 * d2pi_beta, d1pi_beta, pi_beta - std::pow(delta, beta), d1, d2, d3);
-		else
-			nroots = cubic_roots(d3pi_beta / 6.0, 0.5 * d2pi_beta - 1.0 / (sq_delta), d1pi_beta - 2.0 * lambdaC / sq_delta, pi_beta - lambdaC * lambdaC / sq_delta, d1, d2, d3);
-	}
+			! For (TRS), solve: pi_beta + d1pi_beta*d + 0.5*d2pi_beta * d^2 + (1/6) * d3pi_beta * d^3 - delta^beta = 0
+			!
+			! For (ARC), then have beta=2, so solve:
+			!     pi_beta + d1pi_beta*d + 0.5*d2pi_beta * d^2 + (1/6) * d3pi_beta * d^3 - (lambdaC+d)^2 / delta^2 = 0
+			! or
+			!     (pi_beta - lambdaC^2 / delta^2) + (d1pi_beta - 2*lambdaC/delta^2) * d + (0.5*d2pi_beta - 1/delta^2) * d^2 + (1/6) * d3pi_beta * d^3 = 0
+			if (is_tr) then
+				call cubicroots(d3pi_beta / 6.0, HALF * d2pi_beta, d1pi_beta, pi_beta - std::pow(delta, beta), d1, d2, d3, nroots)
+			else
+				call cubicroots(d3pi_beta / 6.0, HALF * d2pi_beta - ONE / (sq_delta), d1pi_beta - TWO * lambdaC / sq_delta, pi_beta - lambdaC * lambdaC / sq_delta, d1, d2, d3, nroots)
+			end if
+		end if
 
-	if (nroots == 0) {
-		new_lambda = lambdaC;
-		return -1;
-	}
-	else if (nroots == 1)
-		new_lambda = lambdaC + d1;
-	else if (nroots == 2)
-		new_lambda = lambdaC + d2;
-	else
-		new_lambda = lambdaC + d3;
-
-	return 0;
+		if (nroots == 0) then
+			new_lambda = lambdaC
+			status = .false.
+		else 
+			status = .true.
+			if (nroots == 1) then
+				new_lambda = lambdaC + d1
+			else if (nroots == 2) then
+				new_lambda = lambdaC + d2
+			else
+				new_lambda = lambdaC + d3
+			end if
+		end if
+	end if
+	
 end subroutine newlda
 
-subroutine hardstep(const Vector& xs, const Vector& ztmp, 
-	const Number delta, const Number lambdaC, Number& alpha, const bool is_tr)
-	Number alpha1, alpha2;
-	Number rhs = (is_tr ? delta : lambdaC / delta);
-	Index nroots = quadroots(ztmp.sqnorm2(), 2.0 * dot(xs, ztmp), xs.sqnorm2() - rhs * rhs, alpha1, alpha2);
-	if (nroots > 0)
-	{
-		alpha = alpha1;  ! any root is fine, since sign of z is arbitrary
-		return 0;
-	}
+subroutine hardstep(xs, ztmp, delta, lambdaC, alpha, is_tr, status)
+	! Common modules
+    use, non_intrinsic :: consts_mod, only : RP, IK, TWO, DEBUGGING
+    use, non_intrinsic :: debug_mod, only : assert
+	use, non_intrinsic :: linalg_mod, only : inprod
+
+	implicit none
+
+	! Inputs
+	real(RP), intent(in) :: xs(:)  ! XS(N)
+	real(RP), intent(in) :: ztmp(:) ! ZTMP(N)
+	real(RP), intent(in) :: lambdaC
+	logical, intent(in) :: is_tr
+
+	! Outputs
+	real(RP), intent(out) :: alpha
+	logical, intent(out) :: status
+
+	! Locals
+	character(len=*), parameter :: srname = 'HARDSTEP'
+	int(IP) :: n
+	int(IP) :: nroots
+	real(RP) :: alpha1, alpha2, rhs
+
+	! Sizes.
+    n = int(size(xs), kind(n))
+
+    ! Preconditions
+    if (DEBUGGING) then
+        call assert(n >= 1, 'N >= 1', srname)
+        call assert(size(xs) == n, 'SIZE(XS) == N', srname)
+        call assert(size(ztmp) == n, 'SIZE(ZTMP) == N', srname)
+    end if
+	
+	if (is_tr) then
+		rhs = delta
 	else
-		return -1;
+		rhs = lambdaC / delta
+	end if
+	
+	call quadroots(sum(ztmp**2), TWO * inprod(xs, ztmp), sum(xs**2) - rhs * rhs, alpha1, alpha2, nroots)
+
+	if (nroots > 0) then
+		! any root is fine, since sign of z is arbitrary
+		alpha = alpha1  
+		status = .true.
+	else
+		status = .false.
+	end if
+
 end subroutine hardstep
 
 subroutine cauchy(hess, g, delta, is_tr, s)
@@ -886,7 +1190,7 @@ subroutine cubicroots(p0, p1, p2, p3, x1, x2, x3, nroots)
 	! Computed solutions are refined using 1 iteration of Newton's method 
 	! (an idea used in GALAHAD/roots.f90)
 	! ------------------------------------------------------------------------------------------- !
-	
+
     ! Common modules
     use, non_intrinsic :: consts_mod, only : RP, IK, HALF, ZERO
 
@@ -911,7 +1215,7 @@ subroutine cubicroots(p0, p1, p2, p3, x1, x2, x3, nroots)
 
 	if (p0 == ZERO) then
 		call quadroots(p1, p2, p3, x1, x2, nroots)
-	else if (p3 == ZERO)
+	else if (p3 == ZERO) then
 		! p(x) = p0*x^3 + p1*x^2 + p2*x --> x=0 is one root
 		x1 = 0;
 		call quadroots(p0, p1, p2, x2, x3, nroots)
