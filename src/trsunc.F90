@@ -16,89 +16,107 @@ implicit none
 contains
 
 subroutine trglob(delta, g_in, hess_in, lambda, s, is_tr)
-! Common modules
-use, non_intrinsic :: consts_mod, only : RP, IK, ONE, TWO, HALF, REALMIN, ZERO, TENTH, EPS, DEBUGGING
-use, non_intrinsic :: infnan_mod, only : is_nan, is_finite
-use, non_intrinsic :: linalg_mod, only : inprod, issymmetric, norm, project, matprod
-use, non_intrinsic :: univar_mod, only : circle_min
+	! Common modules
+	use, non_intrinsic :: consts_mod, only : RP, IK, ONE, TWO, HALF, REALMIN, ZERO, TENTH, EPS, DEBUGGING
+	use, non_intrinsic :: infnan_mod, only : is_nan, is_finite
+	use, non_intrinsic :: linalg_mod, only : inprod, issymmetric, norm, project, matprod
+	use, non_intrinsic :: univar_mod, only : circle_min
 
-use, non_intrinsic :: qdec_mod, only : qdec, crdec
+	use, non_intrinsic :: qdec_mod, only : qdec, crdec
 
-implicit none
+	implicit none
 
-! Inputs
-real(RP), intent(in) :: delta
-real(RP), intent(in) :: g_in(:)  ! G_IN(N)
-real(RP), intent(in) :: hess_in(:, :)  ! HESS_IN(N, N)
-logical, intent(in) :: is_tr
+	! Inputs
+	real(RP), intent(in) :: delta
+	real(RP), intent(in) :: g_in(:)  ! G_IN(N)
+	real(RP), intent(in) :: hess_in(:, :)  ! HESS_IN(N, N)
+	logical, intent(in) :: is_tr
 
-! Outputs
-real(RP), intent(out) :: lambda
-real(RP), intent(out) :: s(:)  ! S(N)
+	! Outputs
+	real(RP), intent(out) :: lambda
+	real(RP), intent(out) :: s(:)  ! S(N)
 
-! Locals
-character(len=*), parameter :: srname = 'TRGLOB'
-integer(IP) :: n
-logical :: scaled
-real(RP) :: gopt(size(g_in))
-real(RP) :: hess(size(hess_in, 1), size(hess_in, 2))
-real(RP) :: modscal
+	! Locals
+	character(len=*), parameter :: srname = 'TRGLOB'
+	integer(IP) :: n
+	integer(IP) :: status
+	logical :: scaled
+	logical :: result
+	real(RP) :: gopt(size(g_in))
+	real(RP) :: hess(size(hess_in, 1), size(hess_in, 2))
+	real(RP) :: modscal
+	real(RP) :: lambdaL, lambdaU, lambdaC
+	real(RP) :: dval ! output from safe_cholesky
+	real(RP) :: norm_check  ! desired value of ||x(lambda)||, potentially updated at each iteration
 
-! Sizes
-n = int(size(g_in), kind(n))
+	! Solver parameters
+	real(RP), parameter :: gamma = 1.0  ! for setting initial lambda (eq 3.51), value taken from GALAHAD/trs.f90
+	real(RP), parameter :: theta = 0.01  ! for setting initial lambda (eq 3.51), value taken from GALAHAD/trs.f90
+	real(RP), parameter :: z_parallel_g_thresh = 1e-8  ! identify when z is parallel to g (for inverse iterations)
+	real(RP), parameter :: bisection_thresh = 1e-12  ! identify when to terminate main bisection loop with failure
+	real(RP), parameter :: small_width_thresh = 1e-5  ! if lambdaC in G, update to lambdaT if not too close to the boundary
+	int(IP), parameter :: num_inverse_iters_lambda_in_G = 1  ! number of inverse iterations to do when lambdaC in G
+	real(RP), parameter :: omega = 1.0  ! not sure what a good value is for this (Algorithm 3.3 updating ratio)
+	int(IP), parameter :: num_potential_hard_case_iters = 10  ! number of iterations of Algorithm 3.3
+	real(RP), parameter :: lambda_convergence_thresh = 1e-12  ! how close successive iterates of Algorithm 3.3 are before termination
+	real(RP), parameter :: potential_hard_case_thresh_decrease = 0.1  ! how much to decrease potential_hard_case_thresh when it's too large
+	int(IP), parameter :: num_refinement_iters = 20  ! max number of refinement iterations
+	real(RP), parameter :: boundary_thresh = 1e-12  ! how close should ||x|| be to delta before terminating
+	real(RP), parameter :: rounding_perturbation = 1e-12  ! how much to perturb final lambdaC by to ensure it's just above -lambda1
+	real(RP), parameter :: potential_hard_case_thresh = 1e-2  ! interval width when to check for hard case (will be reduced if necessary)
 
-! Preconditions
-if (DEBUGGING) then
-    call assert(n >= 1, 'N >= 1', srname)
-    call assert(delta > 0, 'DELTA > 0', srname)
-    call assert(size(g_in) == n, 'SIZE(G) = N', srname)
-    call assert(size(hess_in, 1) == n .and. issymmetric(hess_in), 'HESS is an NxN symmetric matrix', srname)
-    call assert(size(s) == n, 'SIZE(S) == N', srname)
-end if
+	! Sizes
+	n = int(size(g_in), kind(n))
 
-if (is_tr .and. delta < boundary_thresh) then 
-    ! Easy quit: if constraint is ||s|| <= 0, then only feasible solution is s=0
-    s = 0.0
-    lambda = 0.0
-    return
-end if
+	! Preconditions
+	if (DEBUGGING) then
+		call assert(n >= 1, 'N >= 1', srname)
+		call assert(delta > 0, 'DELTA > 0', srname)
+		call assert(size(g_in) == n, 'SIZE(G) = N', srname)
+		call assert(size(hess_in, 1) == n .and. issymmetric(hess_in), 'HESS is an NxN symmetric matrix', srname)
+		call assert(size(s) == n, 'SIZE(S) == N', srname)
+	end if
 
-if (maxval(abs(g_in)) > 1.0E12) then   ! The threshold is empirical.
-    modscal = max(TWO * REALMIN, ONE / maxval(abs(g_in)))  ! MAX: precaution against underflow.
-    gopt = g_in * modscal
-    hess = hess_in * modscal
-    scaled = .true.
-else
-    modscal = ONE  ! This value is not used, but Fortran compilers may complain without it.
-    gopt = g_in
-    hess = hess_in
-    scaled = .false.
-end if
+	if (is_tr .and. delta < boundary_thresh) then 
+		! Easy quit: if constraint is ||s|| <= 0, then only feasible solution is s=0
+		s = 0.0
+		lambda = 0.0
+		return
+	end if
 
-	bool result = false;  ! have we found a value for x yet?
+	if (maxval(abs(g_in)) > 1.0E12) then   ! The threshold is empirical.
+		modscal = max(TWO * REALMIN, ONE / maxval(abs(g_in)))  ! MAX: precaution against underflow.
+		gopt = g_in * modscal
+		hess = hess_in * modscal
+		scaled = .true.
+	else
+		modscal = ONE  ! This value is not used, but Fortran compilers may complain without it.
+		gopt = g_in
+		hess = hess_in
+		scaled = .false.
+	end if
+
+	result = .false.  ! have we found a value for x yet?
 
 	! Find initial lambda region and current guess
-	Number lambdaL, lambdaU, lambdaC;
-	Index status = 0;
+	status = 0
 
-	initial_lambda_region(H_scal, g_scal, delta, lambdaL, lambdaU, is_tr);
-	lambdaC = (lambdaL == 0.0 ? 0.0 : std::max(gamma * sqrt(lambdaL * lambdaU), lambdaL + theta * (lambdaU - lambdaL)));
-	DFOPT_LOG_VERBOSE_IF(debug) << "Initially, lambdaL = " << lambdaL << " and lambdaU = " << lambdaU;
+	call initlda(H_scal, g_scal, delta, lambdaL, lambdaU, is_tr)
+	if (lambdaL == ZERO) then
+		lambdaC = ZERO
+	else
+		lambdaC = max(gamma * sqrt(lambdaL * lambdaU), lambdaL + theta * (lambdaU - lambdaL))
+	end if
 
-	! Main loop
-	Number dval; ! output from safe_cholesky
-	Number norm_check;  ! desired value of ||x(lambda)||, potentially updated at each iteration
+	! ---------------- Main loop ---------------- !
 
 	! For (TRS), check for interior solution before proceeding further
-	if (is_tr && lambdaL == 0.0)
-	{
-		status = solve_kkt_system(H_scal, g_scal, 0.0, x, dval);
-		if (status == 0 && x.norm2() <= delta + boundary_thresh * std::max(1.0, delta))
-		{
-			DFOPT_LOG_VERBOSE_IF(debug) << "Interior solution found, terminating";
-			return true;
-		}
-	}
+	if (is_tr .and. lambdaL == ZERO) then
+		solvekkt(H_scal, g_scal, ZERO, x, dval, status)
+		if (status == 0 .and. sqrt(sum(x**2)) <= delta + boundary_thresh * max(ONE, delta)) then
+			return
+		end if
+	end if
 
 	! Initialize z to a unit vector orthogonal to g (used for all inverse iterations)
 	Number rho;
@@ -107,7 +125,7 @@ end if
 
 	! First, make sure z is not parallel to g...
 	Number gnorm = g_scal.norm2();
-	if (gnorm != 0.0)
+	if (gnorm .neq. ZERO)
 	{
 		! If g=0, then z is definitely not parallel to g
 		Number cos_z_g = dot(z, g_scal) / g_scal.norm2();
@@ -492,72 +510,134 @@ end if
 end subroutine trglob
 
 
-subroutine initlda(const SymmetricMatrix& H, const Vector& g, const Number delta,
-	Number& lambdaL, Number& lambdaU, const bool is_tr)
-	const Number expand_interval_thresh = 1e-5; ! expand [lambdaL, lambdaU] interval slightly, in case correct lambda is at endpoint
+subroutine initlda(H, g, delta, lambdaL, lambdaU, is_tr)
+	! Common modules
+    use, non_intrinsic :: consts_mod, only : RP, IK, ONE, DEBUGGING
+    use, non_intrinsic :: debug_mod, only : assert
+    use, non_intrinsic :: linalg_mod, only : issymmetric
 
+	implicit none
+
+	! Inputs
+	real(RP), intent(in) :: H(:,:)  ! H(N,N)
+	real(RP), intent(in) :: g(:)  ! G(N)
+	real(RP), intent(in) :: delta
+	logical, intent(in) :: is_tr
+
+	! Outputs
+	real(RP), intent(out) :: lambdaL
+	real(RP), intent(out) :: lambdaU
+	
+	! Locals
+	character(len=*), parameter :: srname = 'INITLDA'
+	int(IP) :: i
+	int(IP) :: n
+	int(IP) :: nroots
+	! expand [lambdaL, lambdaU] interval slightly, in case correct lambda is at endpoint
+	real(RP), parameter :: expand_interval_thresh = 1.0e-5
 	! Bounds on min/max eigenvalues of H, satisfying:
 	! -lambda_min(H) <= lambda_min_bound <-- NOTE SIGN FLIP
 	! lambda_max(H) <= lambda_max_bound
-	Number lambda_min_bound, lambda_max_bound;
+	real(RP) :: lambda_min_bound, lambda_max_bound
+	real(RP) :: H_normF, H_normInf, H_min_diag
+	! Use Gershgorin discs to get next estimates on min/max eigenvalues
+	! gershgorin_lower_bound <= lambda(H) <= gershgorin_upper_bound
+	real(RP) :: gershgorin_lower_bound, gershgorin_upper_bound
+	real(RP) :: normg
+	real(RP) :: l1, l2
+	real(RP) :: current_sum
+	real(RP) :: center, radius
+
+	! Sizes.
+    n = int(size(g), kind(n))
+
+    ! Preconditions
+    if (DEBUGGING) then
+        call assert(n >= 1, 'N >= 1', srname)
+        call assert(size(g) == n, 'SIZE(G) == N', srname)
+        call assert(size(H, 1) == n .and. issymmetric(H), 'HESS is n-by-n and symmetric', srname)
+        call assert(size(x) == n, 'SIZE(X) == N', srname)
+    end if
+
 
 	! Use Frobenius and infinity norms of H to get first estimates on min/max eigenvalues
-	Number H_normF = H.normF();
-	Number H_normInf = H.normInf();
-	Number H_min_diag = H.get(0, 0);
-	for (Index i = 1; i < H.dim(); ++i)  ! start from i=1
-		H_min_diag = std::min(H_min_diag, H.get(i, i));
+	H_normF = sqrt(sum(H**2))
 
-	lambda_min_bound = std::min(H_normF, H_normInf);
-	lambda_max_bound = std::min(H_normF, H_normInf);
+	H_normInf = sum(abs(H(1, :)))
+	do i = 2, n  ! start from i=2
+		current_sum = sum(abs(H(i, :)))
+		if (current_sum > H_normInf) then
+			H_normInf = current_sum
+		end if
+	end do
+
+	H_min_diag = H(0, 0)
+	do i = 2, n  ! start from i=2
+		H_min_diag = min(H_min_diag, H(i,i))
+	end do
+
+	lambda_min_bound = min(H_normF, H_normInf)
+	lambda_max_bound = min(H_normF, H_normInf)
 
 	! Use Gershgorin discs to get next estimates on min/max eigenvalues
-	Number gershgorin_lower_bound, gershgorin_upper_bound; ! gershgorin_lower_bound <= lambda(H) <= gershgorin_upper_bound
-	H.eigenvalue_bounds(gershgorin_lower_bound, gershgorin_upper_bound);
-	lambda_min_bound = std::min(lambda_min_bound, -gershgorin_lower_bound);  ! note sign flip
-	lambda_max_bound = std::min(lambda_max_bound, gershgorin_upper_bound);
+	! For each row, Gershgorin disc is B(diag value, sum abs off-diag values)
+	center = H(1, 1)
+	radius = sum(abs(H(1,:))) - abs(center)
+	gershgorin_lower_bound = center - radius
+	gershgorin_upper_bound = center + radius
+	do i=2, n  ! start from i=2
+		center = H(i, i)
+		radius = sum(abs(H(i, :))) - abs(center)
+		gershgorin_lower_bound = min(gershgorin_lower_bound, center - radius)
+		gershgorin_upper_bound = max(gershgorin_upper_bound, center + radius)
+	end do
+
+	lambda_min_bound = min(lambda_min_bound, -gershgorin_lower_bound)  ! note sign flip
+	lambda_max_bound = min(lambda_max_bound, gershgorin_upper_bound)
 
 	! Norm of g
-	Number normg = g.norm2();
+	normg = sqrt(sum(g**2))
 
 	! Set bounds
-	lambdaL = std::max(0.0, -H_min_diag);
-	lambdaU = 0.0;
-	if (is_tr)
-	{
-		lambdaL = std::max(lambdaL, normg / delta - lambda_max_bound);
-		lambdaU = std::max(lambdaU, normg / delta + lambda_min_bound);
-	}
+	lambdaL = max(ZERO, -H_min_diag)
+	lambdaU = ZERO
+	if (is_tr) then
+		lambdaL = max(lambdaL, normg / delta - lambda_max_bound)
+		lambdaU = max(lambdaU, normg / delta + lambda_min_bound)
 	else
-	{
 		! Bounds given by largest root of: lambda^2 + lambda_{min/max} * lambda - ||g|| * delta = 0
 		! Always has at exactly one positive root when ||g||*delta > 0
 		! Always have delta>0 from earlier checks, so if ||g||=0 then either H convex -> lambdaC=0 -> x=0
 		! or H indefinite -> hard case lambdaC=-lambda1
 		! Recall lambda_min_bound = -lambda_min estimate
-		if (normg == 0.0)
-		{
-			lambdaL = std::max(lambdaL, lambda_min_bound); ! lambdaL = -ve best estimate of lambda_min, or zero
-			lambdaU = lambdaL + std::max(expand_interval_thresh, expand_interval_thresh * lambdaL);  ! lambdaU slightly above lambdaL
-		}
+		if (normg == ZERO) then
+			! lambdaL = -ve best estimate of lambda_min, or zero
+			lambdaL = max(lambdaL, lambda_min_bound); 
+			! lambdaU slightly above lambdaL
+			lambdaU = lambdaL + max(expand_interval_thresh, expand_interval_thresh * lambdaL)
 		else
-		{
-			Index nroots;
-			Number l1, l2;
-			nroots = quadroots(1.0, -lambda_min_bound, -normg * delta, l1, l2);
-			!std::cout << "nroots = " << nroots << ", vals = " << l1 << ", " << l2 << std::endl;
-			if (nroots == 2) lambdaU = std::max(lambdaU, std::max(l1, l2));
+			
+			call quadroots(ONE, -lambda_min_bound, -normg * delta, l1, l2, nroots)
+			if (nroots == 2) then
+				lambdaU = max(lambdaU, max(l1, l2))
+			end if
 
-			nroots = quadroots(1.0, lambda_max_bound, -normg * delta, l1, l2);
-			!std::cout << "nroots = " << nroots << ", vals = " << l1 << ", " << l2 << std::endl;
-			if (nroots == 2) lambdaL = std::max(lambdaL, std::max(l1, l2));
-		}
-	}
+			call quadroots(ONE, lambda_max_bound, -normg * delta, l1, l2, nroots)
+			if (nroots == 2) then
+				lambdaL = max(lambdaL, max(l1, l2))
+			end if
+		end if
+	end if
 
 	! Just in case the true lambdaC is exactly equal to one of these, widen the interval slightly so it becomes an interior point
-	if (lambdaL > 0) lambdaL -= std::max(expand_interval_thresh, expand_interval_thresh * lambdaL);
-	lambdaL = std::max(lambdaL, 0.0);  ! the above may make lambdaL slightly negative, which we don't want
-	if (lambdaU > 0) lambdaU += std::max(expand_interval_thresh, expand_interval_thresh * lambdaU);
+	if (lambdaL > ZERO) then
+		lambdaL = lambdaL - max(expand_interval_thresh, expand_interval_thresh * lambdaL)
+	end if
+	! the above may make lambdaL slightly negative, which we don't want
+	lambdaL = max(lambdaL, ZERO)
+	if (lambdaU > ZERO) then 
+		lambdaU = lambdaU + max(expand_interval_thresh, expand_interval_thresh * lambdaU)
+	end if
 end subroutine initlda
 
 subroutine solvekkt(H, g, lambdaC, x, dval, status)
@@ -748,26 +828,23 @@ subroutine cholsolve(A, x)
 		call assert(size(x) == n, 'SIZE(X) == N', srname)
     end if
 
-	solve_lower(x, false);  ! solve L * y = b
-	! solve_lower --> solve_triangular(x, true, unit_diagonal, false);
-	x[0] /= _data[0];  ! _data[0] = _data[_ncols * 0 + 0];
-			for (Index j = 1; j < n; ++j)
-			{
-				for (Index k = j; k-- > 0; )  ! k = j-1, ..., 0
-					x[j] -= x[k] * _data[_ncols * j + k];
-				x[j] /= _data[_ncols * j + j];
-			}
-
+	! solve L * y = b
+	x(1) = x(1) / A(1,1)
+	do j = 2, n 
+		do k = j-1, 1, -1
+			x(j) = x(j) - x(k) * A(j,k)
+		end do
+		x(j) = x(j) / A(j,j)
+	end do
 	
-	solve_lower_trans(x, false);  ! solve L^T * x = y
-	! solve_lower_trans --> solve_triangular(x, true, unit_diagonal, true);
-	x[n - 1] /= _data[_ncols * (n - 1) + n - 1];
-			for (Index j = n - 1; j-- > 0; )  ! j = n-2, ..., 0
-			{
-				for (Index k = j + 1; k < n; ++k)
-					x[j] -= x[k] * _data[_ncols * k + j];
-				x[j] /= _data[_ncols * j + j];
-			}
+	! solve L^T * x = y
+	x(n) = x(n) / A(n, n)
+	do j=n-1, 1, -1
+		do k=j+1, n 
+			x(j) = x(j) - x(k) * A(k,j)
+		end do		
+		x(j) = x(j) / A(j,j)
+	end do
 	
 end subroutine cholsolve
 
@@ -801,11 +878,11 @@ subroutine pi3(x_lambda, pi, d1pi, d2pi, d3pi)
 
 	! x1 <-- (H+lambda*I) \ x1 = -1 * (H+lambda*I) \ x_lambda
 	x1 = -x_lambda
-	H_plus_lambda_I.cholesky_solve(x1)
+	cholsolve(H_plus_lambda_I, x1)
 
 	! x2 <-- (H+lambda*I) \ x2 = -2 * (H+lambda*I) \ x1
 	x2 = -TWO * x1
-	H_plus_lambda_I.cholesky_solve(x2)
+	cholsolve(H_plus_lambda_I, x2)
 
 	! pi'(lambda) = 2*alpha0 * dot(x_lambda, x1)
 	d1pi = TWO * alpha0 * inprod(x_lambda, x1)
