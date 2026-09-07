@@ -7,6 +7,22 @@ module trustregion_mod
     implicit none
 
     interface
+        module subroutine trsunc(delta, g_in, hess_in, lambda, s)
+            real(RP), intent(in) :: delta
+            real(RP), intent(in) :: g_in(:)  ! G_IN(N)
+            real(RP), intent(in) :: hess_in(:, :)  ! HESS_IN(N, N)
+            real(RP), intent(out) :: lambda
+            real(RP), intent(out) :: s(:)  ! S(N)
+        end subroutine trsunc
+
+        module subroutine arcunc(delta, g_in, hess_in, lambda, s)
+            real(RP), intent(in) :: delta
+            real(RP), intent(in) :: g_in(:)  ! G_IN(N)
+            real(RP), intent(in) :: hess_in(:, :)  ! HESS_IN(N, N)
+            real(RP), intent(out) :: lambda
+            real(RP), intent(out) :: s(:)  ! S(N)
+        end subroutine arcunc
+
         module subroutine trsapp(delta, g_in, hess_in, tol, crvmin, s, info)
             real(RP), intent(in) :: delta
             real(RP), intent(in) :: g_in(:)   ! G_IN(N)
@@ -39,12 +55,5 @@ module trustregion_mod
             real(RP), intent(in) :: tol
             real(RP), intent(out) :: s(:)  ! S(N)
         end subroutine trslin
-
-        module function qdec(g, hess, s) result(dec)
-            real(RP), intent(in) :: g(:)  ! G(N)
-            real(RP), intent(in) :: hess(:, :)  ! HESS(N, N)
-            real(RP), intent(in) :: s(:)  ! S(N)
-            real(RP) :: dec
-        end function qdec
     end interface
 end module trustregion_mod

@@ -1,28 +1,40 @@
 submodule (trustregion_mod) trsunc_mod
 !--------------------------------------------------------------------------------------------------!
-! This module provides subroutines concerning the trust-region calculations of BOBYQA.
-!
-! Coded by Zaikun ZHANG (www.zhangzk.net) based on Powell's code and the BOBYQA paper.
-!
-! Dedicated to the late Professor M. J. D. Powell FRS (1936--2015).
-!
-! Started: February 2022
-!
-! Last Modified: Thursday, April 04, 2024 PM09:26:23
+! Global subproblem solver for unconstrained trust-region subproblem:
+! 
+! 	min_{x} Q(x) := dot(g, x) + 0.5 * x^T * H * x, subject to ||x|| <= delta
+! 
+! The solver can also handle the adaptive cubic regularization subproblem,
+! 	min_{x} Q(x) + (1/3) * delta * ||x||^3 = dot(g, x) + 0.5 * x^T * H * x + (1/3) * delta * ||x||^3
+! which is globally optimized using very similar methods.
+! 
+! More details about these problems are available in:
+!   [CGT2000] A. R. Conn, N. I. M. Gould, P. L. Toint. Trust-Region Methods. SIAM (2000).
+!   [CGT2022] C. Cartis, N. I. M. Gould, P. L. Toint. Evaluation Complexity of Algorithms for Nonconvex Optimization. SIAM (2022).
+! 
+! The algorithm implemented here is primarily based on:
+!   [GRT2010] N. I. M. Gould, D. P. Robinson, H. S. Thorne. On solving trust-region and other regularised subproblems in optimization.
+!             Mathematical Programming Computation 2:1 (2010), pp. 21-57. 
+! The same algorithm is also implemented in routines TRS/RQS in GALAHAD; some parameter values are taken from that code.
+! The key ideas of [GRT2010] are presented in summarized form in Chapter 9 of [CGT2022].
+! 
+! This implementation has a fallback strategy: if the main algorithm fails, use the Cauchy step to ensure
+! sufficient decrease is achieved. This is a step of the form x = -alphaC*g, for some alphaC>0 corresponding to
+! an exact linesearch.
 !--------------------------------------------------------------------------------------------------!
 
 implicit none
 
 contains
 
-subroutine trglob(delta, g_in, hess_in, lambda, s, is_tr)
+subroutine trglob(delta, g_in, hess_in, lambda, x, is_tr)
 	! Common modules
 	use, non_intrinsic :: consts_mod, only : RP, IK, ONE, TWO, HALF, REALMIN, ZERO, TENTH, EPS, DEBUGGING
-	use, non_intrinsic :: infnan_mod, only : is_nan, is_finite
+	use, non_intrinsic :: infnan_mod, only : is_nan, is_finite, is_inf
 	use, non_intrinsic :: linalg_mod, only : inprod, issymmetric, norm, project, matprod
 	use, non_intrinsic :: univar_mod, only : circle_min
 
-	use, non_intrinsic :: qdec_mod, only : qdec, crdec
+	use, non_intrinsic :: qdec_mod, only : quadform, qdec, crdec
 
 	implicit none
 
@@ -34,20 +46,42 @@ subroutine trglob(delta, g_in, hess_in, lambda, s, is_tr)
 
 	! Outputs
 	real(RP), intent(out) :: lambda
-	real(RP), intent(out) :: s(:)  ! S(N)
+	real(RP), intent(out) :: x(:)  ! X(N)
 
 	! Locals
 	character(len=*), parameter :: srname = 'TRGLOB'
-	integer(IP) :: n
-	integer(IP) :: status
+	integer(IK) :: n
+	integer(IK) :: status
 	logical :: scaled
 	logical :: result
-	real(RP) :: gopt(size(g_in))
-	real(RP) :: hess(size(hess_in, 1), size(hess_in, 2))
+	real(RP) :: g_scal(size(g_in))
+	real(RP) :: H_scal(size(hess_in, 1), size(hess_in, 2))
+	real(RP) :: H_plus_lambda_I(size(hess_in, 1), size(hess_in, 2))
 	real(RP) :: modscal
 	real(RP) :: lambdaL, lambdaU, lambdaC
 	real(RP) :: dval ! output from safe_cholesky
 	real(RP) :: norm_check  ! desired value of ||x(lambda)||, potentially updated at each iteration
+	real(RP) :: rho
+	real(RP) :: gnorm
+	real(RP) :: cos_z_g
+	logical :: found_lambdaC_in_L
+	logical :: potential_hard_case
+	logical :: hard_case
+	integer(IK) :: it
+	integer(IK) :: i
+	integer(IK) :: it1, it2
+	real(RP) :: lambda1_neg1, lambda2_2, lambda3_2, lambdaT
+	real(RP) :: small_width
+	integer(IK) :: nk
+	real(RP) :: gammak, new_lambda
+	real(RP) :: cauchy_decrease, current_decrease
+	real(RP) :: alpha
+	logical :: use_cauchy_step
+	real(RP) :: xcauchy(size(g_in))
+	real(RP) :: z(size(g_in))
+	real(RP) :: lambda_plus, lambda1_neg1, lambda3_2
+	real(RP) :: old_lambdaC
+	real(RP) :: lambda_width
 
 	! Solver parameters
 	real(RP), parameter :: gamma = 1.0  ! for setting initial lambda (eq 3.51), value taken from GALAHAD/trs.f90
@@ -55,15 +89,15 @@ subroutine trglob(delta, g_in, hess_in, lambda, s, is_tr)
 	real(RP), parameter :: z_parallel_g_thresh = 1e-8  ! identify when z is parallel to g (for inverse iterations)
 	real(RP), parameter :: bisection_thresh = 1e-12  ! identify when to terminate main bisection loop with failure
 	real(RP), parameter :: small_width_thresh = 1e-5  ! if lambdaC in G, update to lambdaT if not too close to the boundary
-	int(IP), parameter :: num_inverse_iters_lambda_in_G = 1  ! number of inverse iterations to do when lambdaC in G
+	integer(IK), parameter :: num_inverse_iters_lambda_in_G = 1  ! number of inverse iterations to do when lambdaC in G
 	real(RP), parameter :: omega = 1.0  ! not sure what a good value is for this (Algorithm 3.3 updating ratio)
-	int(IP), parameter :: num_potential_hard_case_iters = 10  ! number of iterations of Algorithm 3.3
+	integer(IK), parameter :: num_potential_hard_case_iters = 10  ! number of iterations of Algorithm 3.3
 	real(RP), parameter :: lambda_convergence_thresh = 1e-12  ! how close successive iterates of Algorithm 3.3 are before termination
 	real(RP), parameter :: potential_hard_case_thresh_decrease = 0.1  ! how much to decrease potential_hard_case_thresh when it's too large
-	int(IP), parameter :: num_refinement_iters = 20  ! max number of refinement iterations
+	integer(IK), parameter :: num_refinement_iters = 20  ! max number of refinement iterations
 	real(RP), parameter :: boundary_thresh = 1e-12  ! how close should ||x|| be to delta before terminating
 	real(RP), parameter :: rounding_perturbation = 1e-12  ! how much to perturb final lambdaC by to ensure it's just above -lambda1
-	real(RP), parameter :: potential_hard_case_thresh = 1e-2  ! interval width when to check for hard case (will be reduced if necessary)
+	real(RP) :: potential_hard_case_thresh = 1e-2  ! interval width when to check for hard case (will be reduced if necessary)
 
 	! Sizes
 	n = int(size(g_in), kind(n))
@@ -74,25 +108,25 @@ subroutine trglob(delta, g_in, hess_in, lambda, s, is_tr)
 		call assert(delta > 0, 'DELTA > 0', srname)
 		call assert(size(g_in) == n, 'SIZE(G) = N', srname)
 		call assert(size(hess_in, 1) == n .and. issymmetric(hess_in), 'HESS is an NxN symmetric matrix', srname)
-		call assert(size(s) == n, 'SIZE(S) == N', srname)
+		call assert(size(x) == n, 'SIZE(X) == N', srname)
 	end if
 
 	if (is_tr .and. delta < boundary_thresh) then 
 		! Easy quit: if constraint is ||s|| <= 0, then only feasible solution is s=0
-		s = 0.0
-		lambda = 0.0
+		x = ZERO
+		lambda = ZERO
 		return
 	end if
 
 	if (maxval(abs(g_in)) > 1.0E12) then   ! The threshold is empirical.
 		modscal = max(TWO * REALMIN, ONE / maxval(abs(g_in)))  ! MAX: precaution against underflow.
-		gopt = g_in * modscal
-		hess = hess_in * modscal
+		g_scal = g_in * modscal
+		H_scal = hess_in * modscal
 		scaled = .true.
 	else
 		modscal = ONE  ! This value is not used, but Fortran compilers may complain without it.
-		gopt = g_in
-		hess = hess_in
+		g_scal = g_in
+		H_scal = hess_in
 		scaled = .false.
 	end if
 
@@ -112,31 +146,27 @@ subroutine trglob(delta, g_in, hess_in, lambda, s, is_tr)
 
 	! For (TRS), check for interior solution before proceeding further
 	if (is_tr .and. lambdaL == ZERO) then
-		solvekkt(H_scal, g_scal, ZERO, x, dval, status)
+		call solvekkt(H_scal, g_scal, ZERO, x, dval, H_plus_lambda_I, status)
 		if (status == 0 .and. sqrt(sum(x**2)) <= delta + boundary_thresh * max(ONE, delta)) then
 			return
 		end if
 	end if
 
 	! Initialize z to a unit vector orthogonal to g (used for all inverse iterations)
-	Number rho;
-	Number inv_sqrt_n = 1.0 / sqrt((Number)n);
-	z.fill_with(inv_sqrt_n);  ! z[:] = inv_sqrt_n
+	z = ONE / sqrt(real(n, RP))
 
 	! First, make sure z is not parallel to g...
-	Number gnorm = g_scal.norm2();
-	if (gnorm .neq. ZERO)
-	{
+	gnorm = sqrt(sum(g_scal**2))
+	if (gnorm .ne. ZERO) then
 		! If g=0, then z is definitely not parallel to g
-		Number cos_z_g = dot(z, g_scal) / g_scal.norm2();
-		if (std::abs(cos_z_g) >= 1 - z_parallel_g_thresh)
+		cos_z_g = inprod(z, g_scal) / gnorm
+		if (abs(cos_z_g) >= ONE - z_parallel_g_thresh) then
 			! cos(z,g) ~ 1, so g is basically a vector with all entries the same...
-			z[0] = -inv_sqrt_n;  ! this will definitely make z not parallel to g
+			z(1) = -z(1)  ! this will definitely make z not parallel to g
+		end if
 		! Now make z orthogonal to g using the formula z = z - (ghat.T * z) * ghat, where ghat = g / ||g||
-		z.add_multiple(-dot(z, g_scal) / g_scal.sqnorm2(), g_scal);  ! z += [-dot(g,z)/||g||^2] * g
-	}
-
-
+		z(1:n) = z(1:n) - inprod(z, g_scal) / sum(g_scal**2) * g_scal  ! z += [-dot(g,z)/||g||^2] * g
+	end if
 
 	! *** Phase 1 - find a good estimate of lambdaC ***
 	!
@@ -152,171 +182,168 @@ subroutine trglob(delta, g_in, hess_in, lambda, s, is_tr)
 	!
 	! where H(lambda)=H+lambda*I and x(lambda) solves H(lambda)*x(lambda)=-g
 
-	bool found_lambdaC_in_L = false;
-	bool potential_hard_case = false;
-	bool hard_case = false;
-	Index it = 0;
+	found_lambdaC_in_L = .false.
+	potential_hard_case = .false.
+	hard_case = .false.
+	it = 0
 
-	while (std::abs(lambdaU - lambdaL) > std::max(bisection_thresh * std::max(std::abs(lambdaL), std::abs(lambdaU)), bisection_thresh)
-		&& (!found_lambdaC_in_L) && (!hard_case))
-	{
-		if (lambdaL >= lambdaU) break;  ! always expect lambdaL < lambdaU, so stop the loop if this is violated
+	lambda_width = max(bisection_thresh * max(abs(lambdaL), abs(lambdaU)), bisection_thresh)
+	do while (abs(lambdaU - lambdaL) > lambda_width .and. (.not. found_lambdaC_in_L) .and. (.not. hard_case))
+		if (lambdaL >= lambdaU) then
+			exit  ! always expect lambdaL < lambdaU, so stop the loop if this is violated
+		end if
 
-		DFOPT_LOG_VERBOSE_IF(debug) << "It " << it << ", (lambdaL, lambdaC, lambdaU) = " << lambdaL << ", " << lambdaC << ", " << lambdaU;
-		it++;
+		it = it + 1
 
-		if (!potential_hard_case)
-		{
+		if (.not. potential_hard_case) then
 			! Identify which region lambdaC is in
-			status = solve_kkt_system(H_scal, g_scal, lambdaC, x, dval);
+			call solvekkt(H_scal, g_scal, lambdaC, x, dval, H_plus_lambda_I, status)
 
-			if (status == 0)
-			{
+			if (status == 0) then
 				! H + lambdaC*I is positive definite
-				if (x.norm2() >= (is_tr ? delta : lambdaC / delta))
-				{
+				if (is_tr) then
+					norm_check = delta
+				else
+					norm_check = lambdaC / delta
+				end if
+				if (sqrt(sum(x**2)) >= norm_check) then
 					! lambdaC in L, i.e. ||x(lambda)|| >= delta or lambdaC/delta
 					! This is the good region, where we switch to the fast-converging phase 2
-					DFOPT_LOG_VERBOSE_IF(debug) << "lambdaC in L, stopping";
-					found_lambdaC_in_L = true;
-					break; ! exit loop
-				}
+					found_lambdaC_in_L = .true.
+					exit
 				else
-				{
 					! lambda in G, i.e. ||x(lambda)|| < delta (lambda too large)
-					lambdaU = std::min(lambdaU, lambdaC);
+					lambdaU = min(lambdaU, lambdaC)
 
 					! Update lambdaL using inverse iteration
-					for (Index i = 0; i < num_inverse_iters_lambda_in_G; ++i)
-					{
-						! H_plus_lambda_I has already set and factorized in solve_kkt_system above
-						H_plus_lambda_I.cholesky_solve(z);  ! z <-- (H+lambdaC*I) \ z
-						z.scale(1.0 / z.norm2());  ! z <-- z / ||z||
-					}
+					do i = 1, num_inverse_iters_lambda_in_G
+						! H_plus_lambda_I has already set and factorized in solvekkt above
+						call cholsolve(H_plus_lambda_I, z)  ! z <-- (H+lambdaC*I) \ z
+						z(1:n) = z(1:n) / sqrt(sum(z**2))  ! z <-- z / ||z||
+					end do
 
-					rho = H_scal.quadform(z);
-					lambdaL = std::max(lambdaL, -rho);
+					rho = quadform(H_scal, z)
+					lambdaL = max(lambdaL, -rho)
 
 					! Get under-approximations of lambdaC using Taylor approximations, and update lambdaL based on this
-					Number lambda1_neg1, lambda2_2, lambda3_2, lambdaT;
-					lambdaT = lambdaL;
-					status = taylor_new_lambda(x, lambdaC, delta, -1.0, 1, lambda1_neg1, is_tr);
-					if (status == 0) lambdaT = std::max(lambdaT, lambda1_neg1);
-					status = taylor_new_lambda(x, lambdaC, delta, 2.0, 2, lambda2_2, is_tr);
-					if (status == 0) lambdaT = std::max(lambdaT, lambda2_2);
-					status = taylor_new_lambda(x, lambdaC, delta, 2.0, 3, lambda3_2, is_tr);
-					if (status == 0) lambdaT = std::max(lambdaT, lambda3_2);
+					lambdaT = lambdaL
+					call newlda(H_plus_lambda_I, x, lambdaC, delta, -ONE, 1, lambda1_neg1, is_tr, status)
+					if (status == 0) then
+						lambdaT = max(lambdaT, lambda1_neg1)
+					end if
+					call newlda(H_plus_lambda_I, x, lambdaC, delta, TWO, 2, lambda2_2, is_tr, status)
+					if (status == 0) then
+						lambdaT = max(lambdaT, lambda2_2)
+					end if
+					call newlda(H_plus_lambda_I, x, lambdaC, delta, TWO, 3, lambda3_2, is_tr, status)
+					if (status == 0) then 
+						lambdaT = max(lambdaT, lambda3_2)
+					end if
 
-					Number small_width = small_width_thresh * std::abs(lambdaU - lambdaL);
-					if ((lambdaT >= lambdaL + small_width) && (lambdaT <= lambdaU - small_width))
-						lambdaC = lambdaT;
+					small_width = small_width_thresh * abs(lambdaU - lambdaL)
+					if ((lambdaT >= lambdaL + small_width) .and. (lambdaT <= lambdaU - small_width)) then
+						lambdaC = lambdaT
 					else
-						lambdaC = std::max(gamma * sqrt(lambdaL * lambdaU), lambdaL + theta * (lambdaU - lambdaL));
-					!DFOPT_LOG_VERBOSE_IF(debug) << "lambda in G";
-				}
-			}
-			else if (status > 0)
-			{
+						lambdaC = max(gamma * sqrt(lambdaL * lambdaU), lambdaL + theta * (lambdaU - lambdaL))
+					end if
+				end if
+			else if (status > 0) then
 				! lambda in N, i.e. H+lambdaC*I is not positive definite (lambdaC too small)
 				! Here, x and d are set so that x.T * (H + lambdaC*I + d * ek * ek.T) * x = 0
-				lambdaL = std::max(lambdaL, lambdaC);
-				lambdaL = std::max(lambdaL, dval / x.sqnorm2() + lambdaC);
-				lambdaC = std::max(gamma * sqrt(lambdaL * lambdaU), lambdaL + theta * (lambdaU - lambdaL));
-				!DFOPT_LOG_VERBOSE_IF(debug) << "lambda in N";
-			}
+				lambdaL = max(lambdaL, lambdaC)
+				lambdaL = max(lambdaL, dval / sum(x**2) + lambdaC)
+				lambdaC = max(gamma * sqrt(lambdaL * lambdaU), lambdaL + theta * (lambdaU - lambdaL))
 			else
-			{
-				DFOPT_LOG_VERBOSE_IF(debug) << "Error in solve_kkt_system, stopping";
-				break;
-			}
+				! Error in solvekkt
+				exit
+			end if
 
 			! Check if we are in the potential hard case now
-			if (std::abs(lambdaU - lambdaL) <= std::max(potential_hard_case_thresh * std::max(std::abs(lambdaL), std::abs(lambdaU)), potential_hard_case_thresh))
-			{
-				DFOPT_LOG_VERBOSE_IF(debug) << " - Identified potential hard case, lambdaL = " << lambdaL << ", lambdaU = " << lambdaU;
-				potential_hard_case = true;
-			}
-			else {
-				potential_hard_case = false;
-			}
-		} ! end regular bisection step
+			if (abs(lambdaU - lambdaL) <= max(potential_hard_case_thresh * max(abs(lambdaL), abs(lambdaU)), potential_hard_case_thresh)) then
+				! Identified potential hard case
+				potential_hard_case = .true.
+			else 
+				potential_hard_case = .false.
+			end if
+			! end regular bisection step
 		else
-		{
-			DFOPT_LOG_VERBOSE_IF(debug) << " - Potential hard case";
-			Number old_lambdaC = lambdaC;
-			lambdaC = lambdaU; ! definitely an overestimate of -lambda1
+			! Potential hard case
+			old_lambdaC = lambdaC
+			lambdaC = lambdaU  ! definitely an overestimate of -lambda1
 
-			for (Index it2 = 0; it2 < num_potential_hard_case_iters; ++it2)
-			{
-				DFOPT_LOG_VERBOSE_IF(debug) << " - It " << it2 << ", trying lambdaC = " << lambdaC;
-				status = solve_kkt_system(H_scal, g_scal, lambdaC, x, dval);
+			do it2 = 1, num_potential_hard_case_iters
+				call solvekkt(H_scal, g_scal, lambdaC, x, dval, H_plus_lambda_I, status)
 
-				if (status == 0)
-				{
+				if (status == 0) then
 					! H + lambdaC*I is positive definite (expected)
-					if (x.norm2() >= (is_tr ? delta : lambdaC / delta))
-					{
+					if (is_tr) then
+						norm_check = delta
+					else
+						norm_check = lambdaC / delta
+					end if
+					if (sqrt(sum(x**2)) >= norm_check) then
 						! lambdaC in L, i.e. ||x(lambda)|| >= delta or lambdaC/delta
 						! This is the good region, where we switch to the fast-converging phase 2
-						DFOPT_LOG_VERBOSE_IF(debug) << "lambdaC in L, stopping";
-						found_lambdaC_in_L = true;
-						break; ! exit loop
-					}
+						found_lambdaC_in_L = .true.
+						exit
+					end if
 					! Otherwise, update lambdaC using inverse iteration
-					Index nk = (it > 5 ? 1 : 2);  ! don't need too many iterations
-					for (Index i = 0; i < nk; ++i)
-					{
-						! H_plus_lambda_I has already set and factorized in solve_kkt_system above
-						H_plus_lambda_I.cholesky_solve(z);  ! z <-- (H+lambdaC*I) \ z
-						z.scale(1.0 / z.norm2());  ! z <-- z / ||z||
-					}
+					if (it > 5) then
+						nk = 1  ! don't need too many iterations
+					else 
+						nk = 2
+					end if
+					do i = 1, nk
+						! H_plus_lambda_I has already set and factorized in solvekkt above
+						call cholsolve(H_plus_lambda_I, z)  ! z <-- (H+lambdaC*I) \ z
+						z(1:n) = z(1:n) / sqrt(sum(z**2))  ! z <-- z / ||z||
+					end do
 
 					! Update lambdaC
-					rho = H_scal.quadform(z);
-					Number gammak = (nk == 1 ? 1.5 : 3);
-					Number new_lambda = -rho + omega * std::pow(lambdaC + rho, gammak);
-					if (std::abs(new_lambda - lambdaC) < lambda_convergence_thresh)
-					{
-						hard_case = true;
-						break;
-					}
-					if (new_lambda < lambdaC)
-					{
-						lambdaC = new_lambda;
-					}
+					rho = quadform(H_scal, z)
+					if (nk == 1) then
+						gammak = 1.5
 					else
-					{
+						gammak = 3.0
+					end if
+					new_lambda = -rho + omega * (lambdaC + rho) ** (gammak)
+					if (abs(new_lambda - lambdaC) < lambda_convergence_thresh) then
+						hard_case = .true.
+						exit
+					end if
+					if (new_lambda < lambdaC) then
+						lambdaC = new_lambda
+					else
 						! If we start lambdaC sufficiently close to a good value, this should never happen
 						! So, stop the 'potential hard case' iteration and go back to regular bisection phase
-						DFOPT_LOG_VERBOSE_IF(debug) << " - Started nearly hard case too soon, trying again";
-						potential_hard_case = false;
-						lambdaC = old_lambdaC;
-						potential_hard_case_thresh *= potential_hard_case_thresh_decrease;
-						break;
-					}
-				}
-				else if (status > 0)
-				{
+						potential_hard_case = .false.
+						lambdaC = old_lambdaC
+						potential_hard_case_thresh = potential_hard_case_thresh * potential_hard_case_thresh_decrease
+						exit
+					end if
+				else if (status > 0) then
 					! H + lambdaC*I is not positive definite
 					! This happens when lambdaC is slightly smaller than -lambda_{max}(H), due to rounding errors
-					DFOPT_LOG_VERBOSE_IF(debug) << "Potential hard case failure (lambdaC too small from rounding errors) - treat as hard case";
-					hard_case = true;
-					break;
-				}
+					hard_case = .true.
+					exit
 				else
-				{
-					DFOPT_LOG_VERBOSE_IF(debug) << "Error in solve_kkt_system, stopping";
-					break;
-				}
-			}  ! end potential hard case iteration loop
+					! Error in solvekkt, stopping
+					exit
+				end if
+			end do  ! end potential hard case iteration loop
 
 			! Stop the bisection loop
-			if (found_lambdaC_in_L || hard_case || status < 0) break;
+			if (found_lambdaC_in_L .or. hard_case .or. status < 0) then
+				exit
+			end if
 
 			! If the potential hard case didn't find lambdaC in L, then lambdaC is still in G and is a potential upper bound
-			lambdaU = std::min(lambdaC, lambdaU);
-		} ! end potential hard case
-	} ! end bisection loop
+			lambdaU = min(lambdaC, lambdaU)
+		end if ! end potential hard case
+
+		! Update desired interval width for termination at start of next iteration
+		lambda_width = max(bisection_thresh * max(abs(lambdaL), abs(lambdaU)), bisection_thresh)
+	end do ! end bisection loop
 
 	! End of main lambdaC search phase
 	! Three possibilities to get here:
@@ -324,195 +351,160 @@ subroutine trglob(delta, g_in, hess_in, lambda, s, is_tr)
 	! 2. In the hard case, which has a solution with a special form
 	! 3. Error in above search, terminate with failure
 
-	if (found_lambdaC_in_L)
-	{
+	if (found_lambdaC_in_L) then
 		! Refine an estimate lambdaC in L
-		Number lambda_plus, lambda1_neg1, lambda3_2;
-		DFOPT_LOG_VERBOSE_IF(debug) << "Phase 2: refining lambdaC = " << lambdaC;
-		for (Index it2 = 0; it2 < num_refinement_iters; ++it2)
-		{
-			status = taylor_new_lambda(x, lambdaC, delta, -1.0, 1, lambda1_neg1, is_tr);
-			if (status == 0)
-			{
-				status = taylor_new_lambda(x, lambdaC, delta, 2.0, 3, lambda3_2, is_tr);
-				!DFOPT_LOG_VERBOSE_IF(debug) << "It " << it << ", lambda1(-1) = " << lambda1_neg1 << ", lambda3(2) = " << lambda3_2;
-				if (status == 0)
-					lambda_plus = std::max(lambda1_neg1, lambda3_2);
+		do it1 = 1, num_refinement_iters
+			call newlda(H_plus_lambda_I, x, lambdaC, delta, -ONE, 1, lambda1_neg1, is_tr, status);
+			if (status == 0) then
+				call newlda(H_plus_lambda_I, x, lambdaC, delta, TWO, 3, lambda3_2, is_tr, status);
+				if (status == 0) then
+					lambda_plus = max(lambda1_neg1, lambda3_2)
 				else
-					lambda_plus = lambda1_neg1;
-			}
+					lambda_plus = lambda1_neg1
+				end if
 			else
-			{
-				lambda_plus = lambdaC;
-			}
-			DFOPT_LOG_VERBOSE_IF(debug) << "- Refining iteration " << it << " found new lambdaC <-" << lambda_plus;
-			if (std::abs(lambdaC - lambda_plus) < EPS_MACHINE * std::max(1.0, std::abs(lambdaC)))
-			{
-				! termination from GALAHAD/trs.f90 -- refinement iteration not achieveing much
-				lambdaC = lambda_plus;
-				break;
-			}
-			lambdaC = lambda_plus;
+				lambda_plus = lambdaC
+			end if
+			
+			if (abs(lambdaC - lambda_plus) < EPS * max(1.0, abs(lambdaC))) then
+				! termination from GALAHAD/trs.f90 -- refinement iteration not achieving much
+				lambdaC = lambda_plus
+				exit
+			end if
+			lambdaC = lambda_plus
 
 			! Recompute factorization
-			status = solve_kkt_system(H_scal, g_scal, lambdaC, x, dval);
-			if (status == 0)
-			{
+			call solvekkt(H_scal, g_scal, lambdaC, x, dval, H_plus_lambda_I, status)
+			if (status == 0) then
 				! H + lambdaC*I is positive definite
 				! Check if we are near the desired norm
-				norm_check = (is_tr ? delta : lambdaC / delta);  ! check ||x(lambda)|| ~ this value
-				if (std::abs(x.norm2() - norm_check) < boundary_thresh * std::max(1.0, norm_check))
-				{
-					DFOPT_LOG_VERBOSE_IF(debug) << "Terminating near boundary (success)";
-					break;
-				}
-			}
+				if (is_tr) then
+					norm_check = delta
+				else
+					norm_check = lambdaC / delta
+				end if
+				if (abs(sqrt(sum(x**2)) - norm_check) < boundary_thresh * max(ONE, norm_check)) then
+					! Terminating near boundary (success)
+					exit
+				end if
 			else
-			{
 				! In the refinement phase (lambdaC in L), we should never be able to produce a new lambdaC in N
 				! i.e. H + lambdaC*I should always be positive definite
-				if (status > 0)
-					! H + lambdaC*I is not positive definite
-					DFOPT_LOG_VERBOSE_IF(debug) << "ISSUE, lambdaC has left the good region!";
-					else
-						! Error in solve_kkt_system()
-					DFOPT_LOG_VERBOSE_IF(debug) << "Positive definite Cholesky solve failed, stopping";
-				break;
-			}
-		}
+
+				! status > 0 --> H + lambdaC*I is not positive definite (left the good region)
+				! status <= 0 --> error in solvekkt
+				exit
+			end if
+		end do
 
 		! End of refinement phase, terminate with good estimate...
-		if (status == 0)
-		{
-			DFOPT_LOG_VERBOSE_IF(debug) << "Final solve with lambdaC = " << lambdaC;
-			status = solve_kkt_system(H_scal, g_scal, lambdaC, x, dval);
-			if (status == 0)
-			{
-				Number xnorm = x.norm2();
-				norm_check = (is_tr ? delta : lambdaC / delta);  ! check ||x(lambda)|| ~ this value
-				if (std::abs(xnorm - norm_check) < boundary_thresh * std::max(1.0, norm_check))
-				{
-					DFOPT_LOG_VERBOSE_IF(debug) << "Phase 2 success";
-					result = true;
-				}
+		if (status == 0) then
+			! Final solve with lambdaC
+			call solvekkt(H_scal, g_scal, lambdaC, x, dval, H_plus_lambda_I, status)
+			if (status == 0) then
+				if (is_tr) then
+					norm_check = delta
 				else
-				{
+					norm_check = lambdaC / delta
+				end if
+				if (abs(sqrt(sum(x**2)) - norm_check) < boundary_thresh * max(ONE, norm_check)) then
+					result = .true.
+				else
 					! Scale x to have the desired norm
-					DFOPT_LOG_VERBOSE_IF(debug) << "Phase 2 solution too far from boundary, ||x|| - expected value = " << xnorm - norm_check << ", scaling to desired norm";
-					x.scale(norm_check / xnorm);  ! x <-- (norm_check / xnorm)
-					result = true;
-				}
-			}
+					x(1:n) = x(1:n) * (norm_check / sqrt(sum(x**2)))
+					result = .true.
+				end if
 			else
-			{
-				if (status > 0)
-				{
-					DFOPT_LOG_VERBOSE_IF(debug) << "Easy case error: final lambdaC gave indefinite Hessian";
-				}
-				else
-				{
-					DFOPT_LOG_VERBOSE_IF(debug) << "Positive definite Cholesky solve failed, stopping";
-				}
-				result = false;
-			}
-		}
+				! status > 0 --> Easy case error: final lambdaC gave indefinite Hessian
+				! status <= 0 --> Positive definite Cholesky solve failed
+				result = .false.
+			end if
 		else
-		{
 			! Error in refinement phase
-			DFOPT_LOG_VERBOSE_IF(debug) << "Error in refinement phase";
-			result = false;
-		}
-	}
-	else if (hard_case)
-	{
-		DFOPT_LOG_VERBOSE_IF(debug) << "Hard case";
+			result = .false.
+		end if
+	else if (hard_case) then
+		! Hard case
 		! Here, z is a good estimate of u1, a unit eigenvector corresponding to lambda1
-		lambdaC = -H_scal.quadform(z);  ! lambdaC = -lambda1
-		status = solve_kkt_system(H_scal, g_scal, lambdaC, x, dval);
+		lambdaC = -quadform(H_scal, z)  ! lambdaC = -lambda1
+		call solvekkt(H_scal, g_scal, lambdaC, x, dval, H_plus_lambda_I, status)
 
-		if (status > 0)
-		{
+		if (status > 0) then
 			! H + lambdaC*I not positive definite, try again with slightly larger lambdaC to avoid rounding errors
-			lambdaC += std::max(rounding_perturbation, rounding_perturbation * std::abs(lambdaC));
-			status = solve_kkt_system(H_scal, g_scal, lambdaC, x, dval);
-		}
+			lambdaC = lambdaC + max(rounding_perturbation, rounding_perturbation * abs(lambdaC))
+			call solvekkt(H_scal, g_scal, lambdaC, x, dval, H_plus_lambda_I, status)
+		end if
 
-		if (status == 0)
-		{
+		if (status == 0) then
 			! Final solution is x + alpha*z, with alpha chosen to give correct vector norm
-			Number alpha;
-			status = hard_case_stepsize(x, z, delta, lambdaC, alpha, is_tr);
-			if (status == 0)
-			{
-				DFOPT_LOG_VERBOSE_IF(debug) << " - Using alpha = " << alpha;
-				x.add_multiple(alpha, z);  ! x += alpha*z
-			}
+			call hardstep(x, z, delta, lambdaC, alpha, is_tr, status)
+			if (status == 0) then
+				x(1:n) = x(1:n) + alpha * z(1:n)
+			end if
 			! status != 0, i.e. if no roots to the quadratic, then ||xs|| sufficiently large already, so nothing to do
-			result = true;
-		}
+			result = .true.
 		else
-		{
-			if (status > 0)
-			{
-				DFOPT_LOG_VERBOSE_IF(debug) << "FAILURE: Rounding errors, Rayleigh quotient gave eigenvalue underestimate";
-			}
-			else
-			{
-				DFOPT_LOG_VERBOSE_IF(debug) << "Positive definite Cholesky solve failed, stopping";
-			}
-			result = false;
-		}
-	}  ! end hard case
+			! status > 0 --> Rounding errors, Rayleigh quotient gave eigenvalue underestimate
+			! status <= 0 --> Positive definite Cholesky solve failed
+			result = .false.
+		end if
+		! end hard case
 	else
-	{
-		DFOPT_LOG_VERBOSE_IF(debug) << "Error in bisection phase";
-		result = false;
-	}
+		! Error in bisection phase
+		result = .false.
+	end if
 
 	! Catch any inf/NaN issues here
-	if (!x.all_finite()) result = false;
+	do i = 1, n 
+		if (is_nan(x(i)) .or. is_inf(x(i))) then
+			result = .false.
+			exit
+		end if
+	end do
 
 	! Compute Cauchy step as safeguard - use if above computation failed, or didn't get sufficient decrease
-	cauchy_step(H_scal, g_scal, delta, is_tr);  ! set xcauchy to Cauchy step
-	bool use_cauchy_step = false;
+	call cauchy(H_scal, g_scal, delta, is_tr, xcauchy)  ! set xcauchy to Cauchy step
+	use_cauchy_step = .false.
 
-	if (result)
-	{
+	if (result) then
 		! If global minimizer computation above succeeded, make sure got at least Cauchy decrease
-		use_cauchy_step = false;
-		Number cauchy_decrease = (is_tr ? model_decrease(H_scal, g_scal, xcauchy) : model_decrease_cubic_reg(H_scal, g_scal, delta, xcauchy));
-		Number current_decrease = (is_tr ? model_decrease(H_scal, g_scal, x) : model_decrease_cubic_reg(H_scal, g_scal, delta, x));
-		
-		if (cauchy_decrease > current_decrease)
-		{
-			DFOPT_LOG_VERBOSE_IF(debug) << "Global step didn't achieve sufficient decrease, using Cauchy step instead";
-			use_cauchy_step = true;
-		}
-		else if (is_tr && (x.norm2() > delta + boundary_thresh * std::max(1.0, delta)))
-		{
-			DFOPT_LOG_VERBOSE_IF(debug) << "Global step outside feasible region, using Cauchy step instead";
-			use_cauchy_step = true;
-		}
+		use_cauchy_step = .false.
+		if (is_tr) then
+			cauchy_decrease = qdec(g_scal, H_scal, xcauchy)
+			current_decrease = qdec(g_scal, H_scal, x)
 		else
-		{
-			use_cauchy_step = false;
-		}
-	}
+			cauchy_decrease = crdec(g_scal, H_scal, xcauchy, delta)
+			current_decrease = crdec(g_scal, H_scal, x, delta)
+		end if
+		
+		if (cauchy_decrease > current_decrease) then
+			! Global step didn't achieve sufficient decrease, using Cauchy step instead
+			use_cauchy_step = .true.
+		else if (is_tr .and. (sqrt(sum(x**2)) > delta + boundary_thresh * max(1.0, delta))) then
+			! Global step outside feasible region, using Cauchy step instead
+			use_cauchy_step = .true.
+		else
+			use_cauchy_step = .false.
+		end if
 	else
-	{
-		DFOPT_LOG_VERBOSE_IF(debug) << "Global step calculation failed, using Cauchy step instead";
-		use_cauchy_step = true;
-	}
+		! Global step calculation failed, using Cauchy step instead
+		use_cauchy_step = .true.
+	end if
 
-	if (use_cauchy_step) x.copy_from(xcauchy);  ! x <-- copy(xcauchy)
+	! Set final lambda value
+	lambda = lambdaC
 
-	return true;
+	if (use_cauchy_step) then 
+		x(1:n) = xcauchy(1:n)
+		lambda = -ONE  ! flag failure
+	end if
+
 end subroutine trglob
 
 
 subroutine initlda(H, g, delta, lambdaL, lambdaU, is_tr)
 	! Common modules
-    use, non_intrinsic :: consts_mod, only : RP, IK, ONE, DEBUGGING
+    use, non_intrinsic :: consts_mod, only : RP, IK, ZERO, ONE, DEBUGGING
     use, non_intrinsic :: debug_mod, only : assert
     use, non_intrinsic :: linalg_mod, only : issymmetric
 
@@ -530,9 +522,9 @@ subroutine initlda(H, g, delta, lambdaL, lambdaU, is_tr)
 	
 	! Locals
 	character(len=*), parameter :: srname = 'INITLDA'
-	int(IP) :: i
-	int(IP) :: n
-	int(IP) :: nroots
+	integer(IK) :: i
+	integer(IK) :: n
+	integer(IK) :: nroots
 	! expand [lambdaL, lambdaU] interval slightly, in case correct lambda is at endpoint
 	real(RP), parameter :: expand_interval_thresh = 1.0e-5
 	! Bounds on min/max eigenvalues of H, satisfying:
@@ -556,7 +548,6 @@ subroutine initlda(H, g, delta, lambdaL, lambdaU, is_tr)
         call assert(n >= 1, 'N >= 1', srname)
         call assert(size(g) == n, 'SIZE(G) == N', srname)
         call assert(size(H, 1) == n .and. issymmetric(H), 'HESS is n-by-n and symmetric', srname)
-        call assert(size(x) == n, 'SIZE(X) == N', srname)
     end if
 
 
@@ -571,7 +562,7 @@ subroutine initlda(H, g, delta, lambdaL, lambdaU, is_tr)
 		end if
 	end do
 
-	H_min_diag = H(0, 0)
+	H_min_diag = H(1, 1)
 	do i = 2, n  ! start from i=2
 		H_min_diag = min(H_min_diag, H(i,i))
 	end do
@@ -640,7 +631,7 @@ subroutine initlda(H, g, delta, lambdaL, lambdaU, is_tr)
 	end if
 end subroutine initlda
 
-subroutine solvekkt(H, g, lambdaC, x, dval, status)
+subroutine solvekkt(H, g, lambdaC, x, dval, H_plus_lambda_I, status)
 	! Common modules
     use, non_intrinsic :: consts_mod, only : RP, IK, ONE, DEBUGGING
     use, non_intrinsic :: debug_mod, only : assert
@@ -656,14 +647,14 @@ subroutine solvekkt(H, g, lambdaC, x, dval, status)
 	! Outputs
 	real(RP), intent(out) :: x(:)  ! x(N)
 	real(RP), intent(out) :: dval
-	logical, intent(out) :: status
+	real(RP), intent(out) :: H_plus_lambda_I(:, :)  ! H_plus_lambda_I(N,N)
+	integer(IK), intent(out) :: status
 
 	! Locals
 	character(len=*), parameter :: srname = 'SOLVEKKT'
-	int(IP) :: i
-	int(IP) :: n
-	int(IP) :: cholstatus
-	real(RP) :: H_plus_lambda_I(size(H,1), size(H,2))
+	integer(IK) :: i
+	integer(IK) :: n
+	
 
 	! Sizes.
     n = int(size(g), kind(n))
@@ -674,23 +665,21 @@ subroutine solvekkt(H, g, lambdaC, x, dval, status)
         call assert(size(g) == n, 'SIZE(G) == N', srname)
         call assert(size(H, 1) == n .and. issymmetric(H), 'HESS is n-by-n and symmetric', srname)
         call assert(size(x) == n, 'SIZE(X) == N', srname)
+		call assert(size(H_plus_lambda_I, 1) == n .and. size(H_plus_lambda_I, 2) == n, 'H_p_l_I is n-by-n and symmetric', srname)
     end if
 
 	H_plus_lambda_I = H 
 	do i = 1, n 
-		H_plus_lambda_I(i, i) += lambdaC
+		H_plus_lambda_I(i, i) = H_plus_lambda_I(i, i) + lambdaC
 	end do
 
-	call cholsafe(H_plus_lambda_I, x, dval, cholstatus)
+	call cholsafe(H_plus_lambda_I, x, dval, status)
 	
-	if (cholstatus == 0) then
+	if (status == 0) then
 		! H + lambdaC*I was positive definite: solve (H + lambdaC*I) * x = -g
 
 		x = -ONE * g
-		cholsolve(H_plus_lambda_I, x)
-		status = .true.
-	else
-		status = .false.
+		call cholsolve(H_plus_lambda_I, x)
 	end if
 end subroutine solvekkt
 
@@ -726,12 +715,12 @@ subroutine cholsafe(A, v, delta, status)
 	real(RP), intent(inout) :: A(:,:)  ! A(N,N)
 	real(RP), intent(out) :: v(:)  ! V(N)
 	real(RP), intent(out) :: delta
-	int(IP), intent(out) :: status
+	integer(IK), intent(out) :: status
 
 	! Locals
 	character(len=*), parameter :: srname = 'CHOLSAFE'
-	int(IP) :: i, j, k, l
-	int(IP) :: n
+	integer(IK) :: i, j, k, l
+	integer(IK) :: n
 	real(RP) :: Lkk, sqrt_Lkk
 	real(RP) :: adiag(size(A, 1))  ! adiag(N)
 
@@ -773,7 +762,7 @@ subroutine cholsafe(A, v, delta, status)
 					do l = j + 1, k
 						v(j) = v(j) - A(l, j) * v(l)
 					end do
-					v(j) /= A(j, j)
+					v(j) = v(j) / A(j, j)
 				end if
 			end do
 			delta = -adiag(k)
@@ -781,7 +770,7 @@ subroutine cholsafe(A, v, delta, status)
 				delta = delta + A(k, j) * A(k, j)
 			end do
 
-			break
+			exit
 		else
 			Lkk = A(k, k);
 			sqrt_Lkk = sqrt(Lkk)
@@ -815,8 +804,8 @@ subroutine cholsolve(A, x)
 
 	! Locals
 	character(len=*), parameter :: srname = 'CHOLSOLVE'
-	int(IP) :: j, k
-	int(IP) :: n
+	integer(IK) :: j, k
+	integer(IK) :: n
 
 	! Sizes.
     n = int(size(A, 1), kind(n))
@@ -848,13 +837,16 @@ subroutine cholsolve(A, x)
 	
 end subroutine cholsolve
 
-subroutine pi3(x_lambda, pi, d1pi, d2pi, d3pi)
+subroutine pi3(H_plus_lambda_I, x_lambda, pi, d1pi, d2pi, d3pi)
 	! Common modules
-    use, non_intrinsic :: consts_mod, only : RP, IK, HALF, TWO, ONE
+    use, non_intrinsic :: consts_mod, only : RP, IK, HALF, TWO, ONE, DEBUGGING
+	use, non_intrinsic :: debug_mod, only : assert
+	use, non_intrinsic :: linalg_mod, only : inprod
 
     implicit none
 
 	! Inputs
+	real(RP), intent(in) :: H_plus_lambda_I(:, :)  ! H_p_l_I(N,N)
 	real(RP), intent(in) :: x_lambda(:)  ! x_lambda(N)
 	
 	! Outputs
@@ -864,6 +856,7 @@ subroutine pi3(x_lambda, pi, d1pi, d2pi, d3pi)
 	real(RP), intent(out) :: d3pi
 
 	! Locals
+	character(len=*), parameter :: srname = 'PI3'
 	integer(IK) :: n
 	real(RP), parameter :: alpha0 = ONE
 	real(RP), parameter :: alpha1 = 6.0
@@ -873,16 +866,23 @@ subroutine pi3(x_lambda, pi, d1pi, d2pi, d3pi)
     ! Sizes.
     n = int(size(x_lambda), kind(n))
 
+	! Preconditions
+    if (DEBUGGING) then
+        call assert(n >= 1, 'N >= 1', srname)
+        call assert(size(H_plus_lambda_I, 1) == n .and. size(H_plus_lambda_I, 2) == n, 'H_p_l_I is n-by-n', srname)
+		call assert(size(x_lambda) == n, 'SIZE(X) == N', srname)
+    end if
+
 	! zero-th deriv is just pi(lambda) = ||x(lambda)||^2
 	pi = sum(x_lambda**2) 
 
 	! x1 <-- (H+lambda*I) \ x1 = -1 * (H+lambda*I) \ x_lambda
 	x1 = -x_lambda
-	cholsolve(H_plus_lambda_I, x1)
+	call cholsolve(H_plus_lambda_I, x1)
 
 	! x2 <-- (H+lambda*I) \ x2 = -2 * (H+lambda*I) \ x1
 	x2 = -TWO * x1
-	cholsolve(H_plus_lambda_I, x2)
+	call cholsolve(H_plus_lambda_I, x2)
 
 	! pi'(lambda) = 2*alpha0 * dot(x_lambda, x1)
 	d1pi = TWO * alpha0 * inprod(x_lambda, x1)
@@ -892,13 +892,14 @@ subroutine pi3(x_lambda, pi, d1pi, d2pi, d3pi)
 	d3pi = TWO * alpha1 * inprod(x1, x2) 
 endsubroutine pi3
 
-subroutine pi3beta(x_lambda, beta, pi_beta, d1pi_beta, d2pi_beta, d3pi_beta)
+subroutine pi3beta(H_plus_lambda_I, x_lambda, beta, pi_beta, d1pi_beta, d2pi_beta, d3pi_beta)
 	! Common modules
     use, non_intrinsic :: consts_mod, only : RP, IK, HALF, TWO, ONE
 
     implicit none
 
 	! Inputs
+	real(RP), intent(in) :: H_plus_lambda_I(:, :)  ! H_p_l_I(N,N)
 	real(RP), intent(in) :: x_lambda(:)  ! x_lambda(N)
 	real(RP), intent(in) :: beta
 	
@@ -910,59 +911,61 @@ subroutine pi3beta(x_lambda, beta, pi_beta, d1pi_beta, d2pi_beta, d3pi_beta)
 
 	! Locals
 	real(RP) :: pi, d1pi, d2pi, d3pi
-	real(RP) :: half_beta = HALF * beta
+	real(RP) :: half_beta
 
-	call pi3(x_lambda, pi, d1pi, d2pi, d3pi)
+	half_beta = HALF * beta
+
+	call pi3(H_plus_lambda_I, x_lambda, pi, d1pi, d2pi, d3pi)
 
 	pi_beta = pi ** half_beta
 	d1pi_beta = half_beta * (pi ** (half_beta - ONE)) * d1pi
-	d2pi_beta = half_beta * (pi ** (half_beta - ONE)) * d2pi
-		+ half_beta * (half_beta - ONE) * (pi**(half_beta-TWO)) * (d1pi**2)
-	d3pi_beta = (pi**2) * d3pi + 3.0 * (half_beta - ONE) * pi * d1pi * d2pi
-		+ (half_beta - ONE) * (half_beta - TWO) * (d1pi**3)
-	d3pi_beta *= half_beta * (pi**(half_beta-3.0))
+	d2pi_beta = half_beta * (pi ** (half_beta - ONE)) * d2pi + half_beta * (half_beta - ONE) * (pi**(half_beta-TWO)) * (d1pi**2)
+	d3pi_beta = (pi**2) * d3pi + 3.0 * (half_beta - ONE) * pi * d1pi * d2pi + (half_beta - ONE) * (half_beta - TWO) * (d1pi**3)
+	d3pi_beta = d3pi_beta * half_beta * (pi**(half_beta-3.0))
 
 end subroutine pi3beta
 
-subroutine newlda(x_lambda, lambdaC, delta, beta, k, new_lambda, is_tr, status)
+subroutine newlda(H_plus_lambda_I, x_lambda, lambdaC, delta, beta, k, new_lambda, is_tr, status)
 	! Common modules
-    use, non_intrinsic :: consts_mod, only : RP, IK, HALF, ONE, TWO, DEBUGGING
+    use, non_intrinsic :: consts_mod, only : RP, IK, ZERO, HALF, ONE, TWO, DEBUGGING
     use, non_intrinsic :: debug_mod, only : assert
 
 	implicit none
 
 	! Inputs
+	real(RP), intent(in) :: H_plus_lambda_I(:, :)  ! H_p_l_I(N,N)
 	real(RP), intent(in) :: x_lambda(:)  ! X_LAMBDA(N)
 	real(RP), intent(in) :: lambdaC
 	real(RP), intent(in) :: delta
 	real(RP), intent(in) :: beta
-	int(IP), intent(in) :: k
+	integer(IK), intent(in) :: k
 	logical, intent(in) :: is_tr
 
 	! Outputs
 	real(RP), intent(out) :: new_lambda
-	logical, intent(out) :: status
+	integer(IK), intent(out) :: status
 
 	! Locals
 	real(RP) :: pi_beta, d1pi_beta, d2pi_beta, d3pi_beta
 	real(RP) :: sq_delta
 	real(RP) :: d1, d2, d3
-	int(IP) :: nroots
+	real(RP) :: p0, p1, p2, p3
+	integer(IK) :: nroots
 
 	! Check for valid combinations of (beta,k)
-	status = .true.
+	status = 0
 	if (k < 1 .or. k > 3 .or. beta == ZERO) then
-		status = .false.
+		status = -1
 	else if (.not. is_tr) then
 		! ARC only implements specific combinations
 		if (.not. (beta == -ONE .and. k == 1) .and. .not. (beta == TWO .and. k == 2) .and. .not. (beta == TWO .and. k == 3)) then
-			status = .false.
+			status = -1
 		end if
 	end if
 	
-	if (status) then
+	if (status == 0) then
 		sq_delta = delta * delta
-		call pi3beta(x_lambda, beta, pi_beta, d1pi_beta, d2pi_beta, d3pi_beta)
+		call pi3beta(H_plus_lambda_I, x_lambda, beta, pi_beta, d1pi_beta, d2pi_beta, d3pi_beta)
 
 		if (k == 1) then
 			! For (TRS), solve: pi_beta + d1pi_beta*d - delta^beta = 0
@@ -972,11 +975,11 @@ subroutine newlda(x_lambda, lambdaC, delta, beta, k, new_lambda, is_tr, status)
 			! or
 			!    d1pi_beta * d^2 + (pi_beta + d1pi_beta*lambdaC) * d + (lambdaC*pi_beta - delta) = 0
 			if (is_tr) then
-				call cubicroots(ZERO, ZERO, d1pi_beta, pi_beta - std::pow(delta, beta), d1, d2, d3, nroots)
+				call cubicroots(ZERO, ZERO, d1pi_beta, pi_beta - (delta ** beta), d1, d2, d3, nroots)
 			else
 				call cubicroots(ZERO, d1pi_beta, pi_beta + d1pi_beta * lambdaC, lambdaC * pi_beta - delta, d1, d2, d3, nroots)
 			end if
-		else if (k == 2)
+		else if (k == 2) then
 			! For (TRS), solve: pi_beta + d1pi_beta*d + 0.5*d2pi_beta * d^2 - delta^beta = 0
 			!
 			! For (ARC), then have beta=2, so solve:
@@ -984,9 +987,13 @@ subroutine newlda(x_lambda, lambdaC, delta, beta, k, new_lambda, is_tr, status)
 			! or
 			!   (pi_beta - lambdaC^2 / delta^2) + (d1pi_beta - 2*lambdaC/delta^2) * d + (0.5*d2pi_beta - 1/delta^2) * d^2 = 0
 			if (is_tr) then
-				call cubicroots(ZERO, HALF * d2pi_beta, d1pi_beta, pi_beta - std::pow(delta, beta), d1, d2, d3, nroots)
+				call cubicroots(ZERO, HALF * d2pi_beta, d1pi_beta, pi_beta - (delta ** beta), d1, d2, d3, nroots)
 			else
-				call cubicroots(ZERO, HALF * d2pi_beta - ONE / (sq_delta), d1pi_beta - TWO * lambdaC / sq_delta, pi_beta - lambdaC * lambdaC / sq_delta, d1, d2, d3, nroots)
+				p0 = ZERO
+				p1 = HALF * d2pi_beta - ONE / (sq_delta)
+				p2 = d1pi_beta - TWO * lambdaC / sq_delta
+				p3 = pi_beta - lambdaC * lambdaC / sq_delta
+				call cubicroots(p0, p1, p2, p3, d1, d2, d3, nroots)
 			end if
 		else
 			! For (TRS), solve: pi_beta + d1pi_beta*d + 0.5*d2pi_beta * d^2 + (1/6) * d3pi_beta * d^3 - delta^beta = 0
@@ -996,17 +1003,21 @@ subroutine newlda(x_lambda, lambdaC, delta, beta, k, new_lambda, is_tr, status)
 			! or
 			!     (pi_beta - lambdaC^2 / delta^2) + (d1pi_beta - 2*lambdaC/delta^2) * d + (0.5*d2pi_beta - 1/delta^2) * d^2 + (1/6) * d3pi_beta * d^3 = 0
 			if (is_tr) then
-				call cubicroots(d3pi_beta / 6.0, HALF * d2pi_beta, d1pi_beta, pi_beta - std::pow(delta, beta), d1, d2, d3, nroots)
+				call cubicroots(d3pi_beta / 6.0, HALF * d2pi_beta, d1pi_beta, pi_beta - (delta ** beta), d1, d2, d3, nroots)
 			else
-				call cubicroots(d3pi_beta / 6.0, HALF * d2pi_beta - ONE / (sq_delta), d1pi_beta - TWO * lambdaC / sq_delta, pi_beta - lambdaC * lambdaC / sq_delta, d1, d2, d3, nroots)
+				p0 = d3pi_beta / 6.0
+				p1 = HALF * d2pi_beta - ONE / (sq_delta)
+				p2 = d1pi_beta - TWO * lambdaC / sq_delta
+				p3 = pi_beta - lambdaC * lambdaC / sq_delta
+				call cubicroots(p0, p1, p2, p3, d1, d2, d3, nroots)
 			end if
 		end if
 
 		if (nroots == 0) then
 			new_lambda = lambdaC
-			status = .false.
+			status = -1
 		else 
-			status = .true.
+			status = -1
 			if (nroots == 1) then
 				new_lambda = lambdaC + d1
 			else if (nroots == 2) then
@@ -1030,17 +1041,18 @@ subroutine hardstep(xs, ztmp, delta, lambdaC, alpha, is_tr, status)
 	! Inputs
 	real(RP), intent(in) :: xs(:)  ! XS(N)
 	real(RP), intent(in) :: ztmp(:) ! ZTMP(N)
+	real(RP), intent(in) :: delta
 	real(RP), intent(in) :: lambdaC
 	logical, intent(in) :: is_tr
 
 	! Outputs
 	real(RP), intent(out) :: alpha
-	logical, intent(out) :: status
+	integer(IK), intent(out) :: status
 
 	! Locals
 	character(len=*), parameter :: srname = 'HARDSTEP'
-	int(IP) :: n
-	int(IP) :: nroots
+	integer(IK) :: n
+	integer(IK) :: nroots
 	real(RP) :: alpha1, alpha2, rhs
 
 	! Sizes.
@@ -1064,16 +1076,16 @@ subroutine hardstep(xs, ztmp, delta, lambdaC, alpha, is_tr, status)
 	if (nroots > 0) then
 		! any root is fine, since sign of z is arbitrary
 		alpha = alpha1  
-		status = .true.
+		status = 0
 	else
-		status = .false.
+		status = -1
 	end if
 
 end subroutine hardstep
 
 subroutine cauchy(hess, g, delta, is_tr, s)
     ! Common modules
-    use, non_intrinsic :: consts_mod, only : RP, IK, HALF, DEBUGGING
+    use, non_intrinsic :: consts_mod, only : RP, IK, ZERO, HALF, ONE, DEBUGGING
     use, non_intrinsic :: debug_mod, only : assert
     use, non_intrinsic :: linalg_mod, only : matprod, inprod, issymmetric
 
@@ -1086,7 +1098,7 @@ subroutine cauchy(hess, g, delta, is_tr, s)
     logical, intent(in) :: is_tr
 
     ! Outputs
-    real(RP), intent(out) :: s
+    real(RP), intent(out) :: s(:)  ! S(N)
 
     ! Local variables
     character(len=*), parameter :: srname = 'CAUCHY'
@@ -1096,6 +1108,7 @@ subroutine cauchy(hess, g, delta, is_tr, s)
     real(RP) :: normg
     real(RP) :: tmp
     real(RP) :: hg(size(g))
+	real(RP) :: tau
 
     ! Sizes.
     n = int(size(g), kind(n))
@@ -1163,7 +1176,7 @@ subroutine quadroots(p0, p1, p2, x1, x2, nroots)
     ! Outputs
     real(RP), intent(out) :: x1
     real(RP), intent(out) :: x2
-    int(IP), intent(out) :: nroots
+    integer(IK), intent(out) :: nroots
 
     ! Localc
     real(RP) :: b, c, d
@@ -1181,7 +1194,7 @@ subroutine quadroots(p0, p1, p2, x1, x2, nroots)
 			nroots = 1
         end if
 	else 
-        if (p2 == ZERO)
+        if (p2 == ZERO) then
 		    ! p0*x^2 + p1*x = 0
             if (p1 == ZERO) then
                 x1 = ZERO;
@@ -1203,6 +1216,7 @@ subroutine quadroots(p0, p1, p2, x1, x2, nroots)
                     x1 = b + sqrt(d)
                 else
                     x1 = b - sqrt(d)
+				end if
                 x2 = c / x1
                 nroots = 2
             else 
@@ -1234,8 +1248,8 @@ subroutine quadroots(p0, p1, p2, x1, x2, nroots)
 		! refine x1
 		p = p0 * x1 * x1 + p1 * x1 + p2;
 		dp = 2 * p0 * x1 + p1;
-		if (dp .neq. ZERO) then
-            x1 -= p / dp;
+		if (dp .ne. ZERO) then
+            x1 = x1 - p / dp;
         end if
     end if
 
@@ -1243,8 +1257,8 @@ subroutine quadroots(p0, p1, p2, x1, x2, nroots)
 		! refine x2
 		p = p0 * x2 * x2 + p1 * x2 + p2;
 		dp = 2 * p0 * x2 + p1;
-		if (dp .neq. ZERO) then
-            x2 -= p / dp;
+		if (dp .ne. ZERO) then
+            x2 = x2 - p / dp;
         end if
     end if
 end subroutine quadroots
@@ -1269,7 +1283,7 @@ subroutine cubicroots(p0, p1, p2, p3, x1, x2, x3, nroots)
 	! ------------------------------------------------------------------------------------------- !
 
     ! Common modules
-    use, non_intrinsic :: consts_mod, only : RP, IK, HALF, ZERO
+    use, non_intrinsic :: consts_mod, only : RP, IK, HALF, ONE, TWO, ZERO
 
     implicit none
 
@@ -1283,7 +1297,7 @@ subroutine cubicroots(p0, p1, p2, p3, x1, x2, x3, nroots)
     real(RP), intent(out) :: x1
     real(RP), intent(out) :: x2
     real(RP), intent(out) :: x3
-    int(IP), intent(out) :: nroots
+    integer(IK), intent(out) :: nroots
 
     ! Locals
     real(RP) :: q1, q2, q3
@@ -1313,7 +1327,7 @@ subroutine cubicroots(p0, p1, p2, p3, x1, x2, x3, nroots)
 		if (d >= ZERO) then
 			! 1 real root + other 2 roots are either double real root or complex conjugate pair 
 			d = (sqrt(d) + abs(b)) ** (ONE / 3.0)
-			if (d .neq. ZERO) then
+			if (d .ne. ZERO) then
                 if (b > ZERO) then
                     b = -d 
                 else
@@ -1387,8 +1401,8 @@ subroutine cubicroots(p0, p1, p2, p3, x1, x2, x3, nroots)
 		! refine x1
 		p = p0 * x1 * x1 * x1 + p1 * x1 * x1 + p2 * x1 + p3
 		dp = 3 * p0 * x1 * x1 + 2 * p1 * x1 + p2
-		if (dp .neq. ZERO) then
-            x1 -= p / dp
+		if (dp .ne. ZERO) then
+            x1 = x1 - p / dp
         end if
     end if
 
@@ -1396,8 +1410,8 @@ subroutine cubicroots(p0, p1, p2, p3, x1, x2, x3, nroots)
 		! refine x2
 		p = p0 * x2 * x2 * x2 + p1 * x2 * x2 + p2 * x2 + p3
 		dp = 3 * p0 * x2 * x2 + 2 * p1 * x2 + p2
-		if (dp .neq. ZERO) then
-            x2 -= p / dp
+		if (dp .ne. ZERO) then
+            x2 = x2 - p / dp
         end if
     end if
 
@@ -1405,8 +1419,8 @@ subroutine cubicroots(p0, p1, p2, p3, x1, x2, x3, nroots)
 		! refine x3
 		p = p0 * x3 * x3 * x3 + p1 * x3 * x3 + p2 * x3 + p3
 		dp = 3 * p0 * x3 * x3 + 2 * p1 * x3 + p2
-		if (dp .neq. ZERO) then
-            x3 -= p / dp
+		if (dp .ne. ZERO) then
+            x3 = x3 - p / dp
         end if
     end if
 

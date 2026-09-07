@@ -16,6 +16,7 @@ add_library (trustregion
   trsapp.F90
   trsbox.F90
   trslin.F90
+  trsunc.F90
   trustregion.F90
 )
 
