@@ -82,6 +82,7 @@ subroutine trglob(delta, g_in, hess_in, lambda, x, is_tr)
 	real(RP) :: lambda_plus, lambda1_neg1, lambda3_2
 	real(RP) :: old_lambdaC
 	real(RP) :: lambda_width
+	logical, parameter :: verbose = .true.
 
 	! Solver parameters
 	real(RP), parameter :: gamma = 1.0  ! for setting initial lambda (eq 3.51), value taken from GALAHAD/trs.f90
@@ -142,12 +143,19 @@ subroutine trglob(delta, g_in, hess_in, lambda, x, is_tr)
 		lambdaC = max(gamma * sqrt(lambdaL * lambdaU), lambdaL + theta * (lambdaU - lambdaL))
 	end if
 
+	if (verbose) then
+		print *, "Initially, lambdaL = ", lambdaL, " and lambdaU = ", lambdaU
+	end if
+
 	! ---------------- Main loop ---------------- !
 
 	! For (TRS), check for interior solution before proceeding further
 	if (is_tr .and. lambdaL == ZERO) then
 		call solvekkt(H_scal, g_scal, ZERO, x, dval, H_plus_lambda_I, status)
 		if (status == 0 .and. sqrt(sum(x**2)) <= delta + boundary_thresh * max(ONE, delta)) then
+			if (verbose) then
+				print *, "Interior solution found, terminating"
+			end if
 			return
 		end if
 	end if
@@ -193,6 +201,10 @@ subroutine trglob(delta, g_in, hess_in, lambda, x, is_tr)
 			exit  ! always expect lambdaL < lambdaU, so stop the loop if this is violated
 		end if
 
+		if (verbose) then
+			print *, "It", it, ", lambdaL = ", lambdaL, "lambdaC = ", lambdaC, ", lambdaU = ", lambdaU
+		end if
+
 		it = it + 1
 
 		if (.not. potential_hard_case) then
@@ -210,6 +222,9 @@ subroutine trglob(delta, g_in, hess_in, lambda, x, is_tr)
 					! lambdaC in L, i.e. ||x(lambda)|| >= delta or lambdaC/delta
 					! This is the good region, where we switch to the fast-converging phase 2
 					found_lambdaC_in_L = .true.
+					if (verbose) then
+						print *, "lambdaC in L, stopping"
+					end if
 					exit
 				else
 					! lambda in G, i.e. ||x(lambda)|| < delta (lambda too large)
@@ -255,12 +270,18 @@ subroutine trglob(delta, g_in, hess_in, lambda, x, is_tr)
 				lambdaC = max(gamma * sqrt(lambdaL * lambdaU), lambdaL + theta * (lambdaU - lambdaL))
 			else
 				! Error in solvekkt
+				if (verbose) then
+					print *, "Error in solvekkt, stopping"
+				end if
 				exit
 			end if
 
 			! Check if we are in the potential hard case now
 			if (abs(lambdaU - lambdaL) <= max(potential_hard_case_thresh * max(abs(lambdaL), abs(lambdaU)), potential_hard_case_thresh)) then
 				! Identified potential hard case
+				if (verbose) then
+					print *, "Identified potential hard case, lambdaL = ", lambdaL, ", lambdaU = ", lambdaU
+				end if
 				potential_hard_case = .true.
 			else 
 				potential_hard_case = .false.
@@ -268,10 +289,16 @@ subroutine trglob(delta, g_in, hess_in, lambda, x, is_tr)
 			! end regular bisection step
 		else
 			! Potential hard case
+			if (verbose) then
+				print *, "Potential hard case"
+			end if
 			old_lambdaC = lambdaC
 			lambdaC = lambdaU  ! definitely an overestimate of -lambda1
 
 			do it2 = 1, num_potential_hard_case_iters
+				if (verbose) then
+					print *, "It2 = ", it2, ", trying lambdaC = ", lambdaC
+				end if
 				call solvekkt(H_scal, g_scal, lambdaC, x, dval, H_plus_lambda_I, status)
 
 				if (status == 0) then
@@ -285,6 +312,9 @@ subroutine trglob(delta, g_in, hess_in, lambda, x, is_tr)
 						! lambdaC in L, i.e. ||x(lambda)|| >= delta or lambdaC/delta
 						! This is the good region, where we switch to the fast-converging phase 2
 						found_lambdaC_in_L = .true.
+						if (verbose) then
+							print *, "lambdaC in L, stopping"
+						end if
 						exit
 					end if
 					! Otherwise, update lambdaC using inverse iteration
@@ -316,6 +346,9 @@ subroutine trglob(delta, g_in, hess_in, lambda, x, is_tr)
 					else
 						! If we start lambdaC sufficiently close to a good value, this should never happen
 						! So, stop the 'potential hard case' iteration and go back to regular bisection phase
+						if (verbose) then
+							print *, "Started nearly hard case too soon, trying again"
+						end if
 						potential_hard_case = .false.
 						lambdaC = old_lambdaC
 						potential_hard_case_thresh = potential_hard_case_thresh * potential_hard_case_thresh_decrease
@@ -324,10 +357,16 @@ subroutine trglob(delta, g_in, hess_in, lambda, x, is_tr)
 				else if (status > 0) then
 					! H + lambdaC*I is not positive definite
 					! This happens when lambdaC is slightly smaller than -lambda_{max}(H), due to rounding errors
+					if (verbose) then
+						print *, "Potential hard case failure (lambdaC too small from rounding errors) - treat as hard case"
+					end if
 					hard_case = .true.
 					exit
 				else
 					! Error in solvekkt, stopping
+					if (verbose) then
+						print *, "Error in solvekkt, stopping"
+					end if
 					exit
 				end if
 			end do  ! end potential hard case iteration loop
@@ -353,22 +392,39 @@ subroutine trglob(delta, g_in, hess_in, lambda, x, is_tr)
 
 	if (found_lambdaC_in_L) then
 		! Refine an estimate lambdaC in L
-		do it1 = 1, num_refinement_iters
+		if (verbose) then
+			print *, "Phase 2: refining lambdaC = ", lambdaC
+		end if
+	
+		do it2 = 1, num_refinement_iters
 			call newlda(H_plus_lambda_I, x, lambdaC, delta, -ONE, 1, lambda1_neg1, is_tr, status);
 			if (status == 0) then
 				call newlda(H_plus_lambda_I, x, lambdaC, delta, TWO, 3, lambda3_2, is_tr, status);
 				if (status == 0) then
 					lambda_plus = max(lambda1_neg1, lambda3_2)
 				else
+					if (verbose) then
+						print *, "newlda2 failed"
+					end if
 					lambda_plus = lambda1_neg1
 				end if
 			else
+				if (verbose) then
+					print *, "newlda1 failed"
+				end if
 				lambda_plus = lambdaC
+			end if
+
+			if (verbose) then
+				print *, "Refining iteration", it2, " found new lambdaC = ", lambda_plus
 			end if
 			
 			if (abs(lambdaC - lambda_plus) < EPS * max(1.0, abs(lambdaC))) then
 				! termination from GALAHAD/trs.f90 -- refinement iteration not achieving much
 				lambdaC = lambda_plus
+				if (verbose) then
+					print *, "Terminating refinement phase (limited progress)"
+				end if
 				exit
 			end if
 			lambdaC = lambda_plus
@@ -385,6 +441,9 @@ subroutine trglob(delta, g_in, hess_in, lambda, x, is_tr)
 				end if
 				if (abs(sqrt(sum(x**2)) - norm_check) < boundary_thresh * max(ONE, norm_check)) then
 					! Terminating near boundary (success)
+					if (verbose) then
+						print *, "Terminating near boundary, success"
+					end if
 					exit
 				end if
 			else
@@ -392,6 +451,13 @@ subroutine trglob(delta, g_in, hess_in, lambda, x, is_tr)
 				! i.e. H + lambdaC*I should always be positive definite
 
 				! status > 0 --> H + lambdaC*I is not positive definite (left the good region)
+				if (verbose) then
+					if (status > 0) then
+						print *, "lambdaC has left the good region!"
+					else
+						print *, "Positive definite Cholesky solve failed, stopping"
+					end if
+				end if
 				! status <= 0 --> error in solvekkt
 				exit
 			end if
@@ -400,6 +466,9 @@ subroutine trglob(delta, g_in, hess_in, lambda, x, is_tr)
 		! End of refinement phase, terminate with good estimate...
 		if (status == 0) then
 			! Final solve with lambdaC
+			if (verbose) then
+				print *, "Final solve with lambdaC = ", lambdaC
+			end if
 			call solvekkt(H_scal, g_scal, lambdaC, x, dval, H_plus_lambda_I, status)
 			if (status == 0) then
 				if (is_tr) then
@@ -409,22 +478,41 @@ subroutine trglob(delta, g_in, hess_in, lambda, x, is_tr)
 				end if
 				if (abs(sqrt(sum(x**2)) - norm_check) < boundary_thresh * max(ONE, norm_check)) then
 					result = .true.
+					if (verbose) then
+						print *, "Phase 2 success"
+					end if
 				else
 					! Scale x to have the desired norm
 					x(1:n) = x(1:n) * (norm_check / sqrt(sum(x**2)))
 					result = .true.
+					if (verbose) then
+						print *, "Phase 2 solution too far from boundary, rescaling"
+					end if
 				end if
 			else
 				! status > 0 --> Easy case error: final lambdaC gave indefinite Hessian
 				! status <= 0 --> Positive definite Cholesky solve failed
+				if (verbose) then
+					if (status > 0) then
+						print *, "Easy case error: final lambdaC gave indefinite Hessian"
+					else 
+						print *, "Positive definite Cholesky solve failed, stopping"
+					end if
+				end if
 				result = .false.
 			end if
 		else
 			! Error in refinement phase
+			if (verbose) then
+				print *, "Error in refinement phase"
+			end if
 			result = .false.
 		end if
 	else if (hard_case) then
 		! Hard case
+		if (verbose) then
+			print *, "Hard case"
+		end if
 		! Here, z is a good estimate of u1, a unit eigenvector corresponding to lambda1
 		lambdaC = -quadform(H_scal, z)  ! lambdaC = -lambda1
 		call solvekkt(H_scal, g_scal, lambdaC, x, dval, H_plus_lambda_I, status)
@@ -439,6 +527,9 @@ subroutine trglob(delta, g_in, hess_in, lambda, x, is_tr)
 			! Final solution is x + alpha*z, with alpha chosen to give correct vector norm
 			call hardstep(x, z, delta, lambdaC, alpha, is_tr, status)
 			if (status == 0) then
+				if (verbose) then
+					print *, "Using alpha = ", alpha
+				end if
 				x(1:n) = x(1:n) + alpha * z(1:n)
 			end if
 			! status != 0, i.e. if no roots to the quadratic, then ||xs|| sufficiently large already, so nothing to do
@@ -446,11 +537,21 @@ subroutine trglob(delta, g_in, hess_in, lambda, x, is_tr)
 		else
 			! status > 0 --> Rounding errors, Rayleigh quotient gave eigenvalue underestimate
 			! status <= 0 --> Positive definite Cholesky solve failed
+			if (verbose) then
+				if (status > 0) then
+					print *, "Rounding errors: Rayleigh quotiend gave eigenvalue underestimate"
+				else
+					print *, "Positive definite Cholesky solve failed"
+				end if
+			end if
 			result = .false.
 		end if
 		! end hard case
 	else
 		! Error in bisection phase
+		if (verbose) then
+			print *, "Error in bisection phase"
+		end if
 		result = .false.
 	end if
 
@@ -479,15 +580,24 @@ subroutine trglob(delta, g_in, hess_in, lambda, x, is_tr)
 		
 		if (cauchy_decrease > current_decrease) then
 			! Global step didn't achieve sufficient decrease, using Cauchy step instead
+			if (verbose) then
+				print *, "Global step didn't achieve sufficient decrease, using Cauchy step instead"
+			end if
 			use_cauchy_step = .true.
 		else if (is_tr .and. (sqrt(sum(x**2)) > delta + boundary_thresh * max(1.0, delta))) then
 			! Global step outside feasible region, using Cauchy step instead
+			if (verbose) then
+				print *, "Global step outside feasible region, using Cauchy step instead"
+			end if
 			use_cauchy_step = .true.
 		else
 			use_cauchy_step = .false.
 		end if
 	else
 		! Global step calculation failed, using Cauchy step instead
+		if (verbose) then
+			print *, "Global step calculation failed, using Cauchy step instead"
+		end if
 		use_cauchy_step = .true.
 	end if
 
@@ -683,6 +793,18 @@ subroutine solvekkt(H, g, lambdaC, x, dval, H_plus_lambda_I, status)
 	end if
 end subroutine solvekkt
 
+subroutine printmat(A)
+	use, non_intrinsic :: consts_mod, only : RP, IK
+    implicit none
+    real(RP) :: A(:, :)
+    integer :: i
+
+    do i = 1, size(A, 1)
+        ! "*(1x, i4)" means: repeat for all elements, add 1 space, use 4 spaces for integer
+		print *, A(i, :)
+    end do
+end subroutine printmat
+
 subroutine cholsafe(A, v, delta, status)
 	! --------------------------------------------------------------- !
 	! Safe in-place Cholesky factorization: A = L * L^T
@@ -734,16 +856,23 @@ subroutine cholsafe(A, v, delta, status)
 		call assert(size(v) == n, 'SIZE(V) == N', srname)
     end if
 
-	! Same as cholesky_factorize_inplace() but with safety features from
-	! Section 7.3.7 of Conn, Gould, Toint, Trust-Region Methods, SIAM (2000)
+	! Algorithm is from Section 7.3.7 of Conn, Gould, Toint, Trust-Region Methods, SIAM (2000)
 	
 	! Save diag(A) in VTMP, as we will need these values to compute delta if failure
 	do i = 1, n 
 		adiag(i) = A(i, i)
 	end do
 
+	! Set return values based on success, overridden if failure
+	status = 0
+	delta = ZERO
+	v = ZERO
+
 	do k = 1, n
+		!print *, "cholsafe k = ", k
+		!call printmat(A)
 		if (A(k, k) <= ZERO) then
+			!print *, "not pos def"
 			! A is not positive definite!
 			status = k
 
@@ -766,21 +895,29 @@ subroutine cholsafe(A, v, delta, status)
 				end if
 			end do
 			delta = -adiag(k)
-			do j = 1, k
-				delta = delta + A(k, j) * A(k, j)
+			do j = 1, k - 1
+				delta = delta + A(k, j) ** 2
 			end do
 
 			exit
 		else
-			Lkk = A(k, k);
+			!print *, "cholsafe, k =", k
+			!call printmat(A)
+			Lkk = A(k, k)
 			sqrt_Lkk = sqrt(Lkk)
-			do j=k + 1, n
+			do j = k + 1, n
 				! A[j:, j] = A[j:, j] - A[j:, k] * A[j, k] / A[k, k]
 				A(j:n, j) = A(j:n, j) - A(j:n, k) * A(j, k) / Lkk
+				!do l = j, n 
+				!	A(l, j) = A(l, j) - A(l, k) * A(j, k) / Lkk
+				!end do
 			end do
 			! A[k:, k] = A[k:, k] / sqrt(A[k, k]);
 			! Need to define sqrt_Lkk early since L(k,k) is updated in this loop
-			A(k:n, k) = A(k:, k) / sqrt_Lkk
+			A(k:n, k) = A(k:n, k) / sqrt_Lkk
+			!do l = k, n 
+			!	A(l, k) = A(l, k) / sqrt_Lkk
+			!end do
 		end if
 	end do
 end subroutine cholsafe
@@ -1017,7 +1154,7 @@ subroutine newlda(H_plus_lambda_I, x_lambda, lambdaC, delta, beta, k, new_lambda
 			new_lambda = lambdaC
 			status = -1
 		else 
-			status = -1
+			status = 0
 			if (nroots == 1) then
 				new_lambda = lambdaC + d1
 			else if (nroots == 2) then
@@ -1426,6 +1563,427 @@ subroutine cubicroots(p0, p1, p2, p3, x1, x2, x3, nroots)
 
 end subroutine cubicroots
 
+subroutine testquad()
+	! Tests for quadroots
+
+	! Common modules
+    use, non_intrinsic :: consts_mod, only : RP, IK, ZERO, ONE, DEBUGGING
+    use, non_intrinsic :: debug_mod, only : assert
+
+	implicit none
+
+	real(RP), parameter :: thresh = 1e-10
+	real(RP) :: p0, p1, p2, x1, x2
+	real(RP) :: x1true, x2true
+	integer(IK) :: nroots, nroots_true, nroots_true_with_repeats
+	real(RP) :: xerr, ferr
+
+	print *, "************** TESTQUAD **************"
+
+	print *, "Basic1"
+	p0 = 2
+	p1 = 0
+	p2 = -1
+	x1true = -0.707106781186548
+	x2true = 0.707106781186548
+	nroots_true = 2
+	nroots_true_with_repeats = 2
+	call quadroots(p0, p1, p2, x1, x2, nroots)
+	if (nroots < nroots_true .or. nroots > nroots_true_with_repeats) then
+		print *, "bad nroots = ", nroots
+	end if
+	xerr = ZERO
+	ferr = ZERO
+	if (nroots >= 1) then
+		xerr = max(xerr, x1 - x1true)
+		ferr = max(ferr, p0 * x1**2 + p1 * x1 + p2)
+	end if
+	if (nroots >= 2) then
+		xerr = max(xerr, x2 - x2true)
+		ferr = max(ferr, p0 * x2**2 + p1 * x2 + p2)
+	end if
+	print *, "xerr =", xerr, "ferr =", ferr
+
+	print *, "Double Root"
+	p0 = 1
+	p1 = 0
+	p2 = 0
+	x1true = 0
+	x2true = 0
+	nroots_true = 1
+	nroots_true_with_repeats = 2
+	call quadroots(p0, p1, p2, x1, x2, nroots)
+	if (nroots < nroots_true .or. nroots > nroots_true_with_repeats) then
+		print *, "bad nroots = ", nroots
+	end if
+	xerr = ZERO
+	ferr = ZERO
+	if (nroots >= 1) then
+		xerr = max(xerr, x1 - x1true)
+		ferr = max(ferr, p0 * x1**2 + p1 * x1 + p2)
+	end if
+	if (nroots >= 2) then
+		xerr = max(xerr, x2 - x2true)
+		ferr = max(ferr, p0 * x2**2 + p1 * x2 + p2)
+	end if
+	print *, "xerr =", xerr, "ferr =", ferr
+
+	print *, "Linear"
+	p0 = 0
+	p1 = 2
+	p2 = 1
+	x1true = -0.5
+	x2true = 1E10
+	nroots_true = 1
+	nroots_true_with_repeats = 1
+	call quadroots(p0, p1, p2, x1, x2, nroots)
+	if (nroots < nroots_true .or. nroots > nroots_true_with_repeats) then
+		print *, "bad nroots = ", nroots
+	end if
+	xerr = ZERO
+	ferr = ZERO
+	if (nroots >= 1) then
+		xerr = max(xerr, x1 - x1true)
+		ferr = max(ferr, p0 * x1**2 + p1 * x1 + p2)
+	end if
+	if (nroots >= 2) then
+		xerr = max(xerr, x2 - x2true)
+		ferr = max(ferr, p0 * x2**2 + p1 * x2 + p2)
+	end if
+	print *, "xerr =", xerr, "ferr =", ferr
+
+	print *, "Constant"
+	p0 = 0
+	p1 = 0
+	p2 = 1
+	x1true = 1E10
+	x2true = 1E10
+	nroots_true = 0
+	nroots_true_with_repeats = 0
+	call quadroots(p0, p1, p2, x1, x2, nroots)
+	if (nroots < nroots_true .or. nroots > nroots_true_with_repeats) then
+		print *, "bad nroots = ", nroots
+	end if
+	xerr = ZERO
+	ferr = ZERO
+	if (nroots >= 1) then
+		xerr = max(xerr, x1 - x1true)
+		ferr = max(ferr, p0 * x1**2 + p1 * x1 + p2)
+	end if
+	if (nroots >= 2) then
+		xerr = max(xerr, x2 - x2true)
+		ferr = max(ferr, p0 * x2**2 + p1 * x2 + p2)
+	end if
+	print *, "xerr =", xerr, "ferr =", ferr
+
+	print *, "Basic2"
+	p0 = 2
+	p1 = 0
+	p2 = -2
+	x1true = -1
+	x2true = 1
+	nroots_true = 2
+	nroots_true_with_repeats = 2
+	call quadroots(p0, p1, p2, x1, x2, nroots)
+	if (nroots < nroots_true .or. nroots > nroots_true_with_repeats) then
+		print *, "bad nroots = ", nroots
+	end if
+	xerr = ZERO
+	ferr = ZERO
+	if (nroots >= 1) then
+		xerr = max(xerr, x1 - x1true)
+		ferr = max(ferr, p0 * x1**2 + p1 * x1 + p2)
+	end if
+	if (nroots >= 2) then
+		xerr = max(xerr, x2 - x2true)
+		ferr = max(ferr, p0 * x2**2 + p1 * x2 + p2)
+	end if
+	print *, "xerr =", xerr, "ferr =", ferr
+
+	print *, "Basic3"
+	p0 = 3
+	p1 = 6
+	p2 = -9
+	x1true = -3
+	x2true = 1
+	nroots_true = 2
+	nroots_true_with_repeats = 2
+	call quadroots(p0, p1, p2, x1, x2, nroots)
+	if (nroots < nroots_true .or. nroots > nroots_true_with_repeats) then
+		print *, "bad nroots = ", nroots
+	end if
+	xerr = ZERO
+	ferr = ZERO
+	if (nroots >= 1) then
+		xerr = max(xerr, x1 - x1true)
+		ferr = max(ferr, p0 * x1**2 + p1 * x1 + p2)
+	end if
+	if (nroots >= 2) then
+		xerr = max(xerr, x2 - x2true)
+		ferr = max(ferr, p0 * x2**2 + p1 * x2 + p2)
+	end if
+	print *, "xerr =", xerr, "ferr =", ferr
+
+	print *, "************** END TESTQUAD **************"
+end subroutine testquad
+
+subroutine testcubic()
+	! Tests for cubicroots
+
+	! Common modules
+    use, non_intrinsic :: consts_mod, only : RP, IK, ZERO, ONE, DEBUGGING
+    use, non_intrinsic :: debug_mod, only : assert
+
+	implicit none
+
+	real(RP) :: p0, p1, p2, p3, x1, x2, x3
+	real(RP) :: x1true, x2true, x3true
+	integer(IK) :: nroots, nroots_true, nroots_true_with_repeats
+	real(RP) :: xerr, ferr
+
+	print *, "************** TESTCUBIC **************"
+
+	print *, "Basic1"
+	p0 = 1
+	p1 = -6
+	p2 = 4
+	p3 = 12
+	x1true = -1.05137424173104
+	x2true = 2.51730404500831
+	x3true = 4.53407019672273
+	nroots_true = 3
+	nroots_true_with_repeats = 3
+	call cubicroots(p0, p1, p2, p3, x1, x2, x3, nroots)
+	if (nroots < nroots_true .or. nroots > nroots_true_with_repeats) then
+		print *, "bad nroots = ", nroots
+	end if
+	xerr = ZERO
+	ferr = ZERO
+	if (nroots >= 1) then
+		xerr = max(xerr, x1 - x1true)
+		ferr = max(ferr, p0 * x1**3 + p1 * x1 ** 2 + p2 * x1 + p3)
+	end if
+	if (nroots >= 2) then
+		xerr = max(xerr, x2 - x2true)
+		ferr = max(ferr, p0 * x2**3 + p1 * x2**2 + p2 * x2 + p3)
+	end if
+	if (nroots >= 3) then
+		xerr = max(xerr, x3 - x3true)
+		ferr = max(ferr, p0 * x3**3 + p1 * x3 ** 2 + p2 * x3 + p3)
+	end if
+	print *, "xerr =", xerr, "ferr =", ferr
+
+	print *, "Basic2"
+	p0 = 3
+	p1 = -7.5
+	p2 = -16.5
+	p3 = 21
+	x1true = -2
+	x2true = 1
+	x3true = 3.5
+	nroots_true = 3
+	nroots_true_with_repeats = 3
+	call cubicroots(p0, p1, p2, p3, x1, x2, x3, nroots)
+	if (nroots < nroots_true .or. nroots > nroots_true_with_repeats) then
+		print *, "bad nroots = ", nroots
+	end if
+	xerr = ZERO
+	ferr = ZERO
+	if (nroots >= 1) then
+		xerr = max(xerr, x1 - x1true)
+		ferr = max(ferr, p0 * x1**3 + p1 * x1 ** 2 + p2 * x1 + p3)
+	end if
+	if (nroots >= 2) then
+		xerr = max(xerr, x2 - x2true)
+		ferr = max(ferr, p0 * x2**3 + p1 * x2**2 + p2 * x2 + p3)
+	end if
+	if (nroots >= 3) then
+		xerr = max(xerr, x3 - x3true)
+		ferr = max(ferr, p0 * x3**3 + p1 * x3 ** 2 + p2 * x3 + p3)
+	end if
+	print *, "xerr =", xerr, "ferr =", ferr
+
+	print *, "TripleRoot"
+	p0 = 1
+	p1 = 0
+	p2 = 0
+	p3 = 0
+	x1true = 0
+	x2true = 0
+	x3true = 0
+	nroots_true = 1
+	nroots_true_with_repeats = 3
+	call cubicroots(p0, p1, p2, p3, x1, x2, x3, nroots)
+	if (nroots < nroots_true .or. nroots > nroots_true_with_repeats) then
+		print *, "bad nroots = ", nroots
+	end if
+	xerr = ZERO
+	ferr = ZERO
+	if (nroots >= 1) then
+		xerr = max(xerr, x1 - x1true)
+		ferr = max(ferr, p0 * x1**3 + p1 * x1 ** 2 + p2 * x1 + p3)
+	end if
+	if (nroots >= 2) then
+		xerr = max(xerr, x2 - x2true)
+		ferr = max(ferr, p0 * x2**3 + p1 * x2**2 + p2 * x2 + p3)
+	end if
+	if (nroots >= 3) then
+		xerr = max(xerr, x3 - x3true)
+		ferr = max(ferr, p0 * x3**3 + p1 * x3 ** 2 + p2 * x3 + p3)
+	end if
+	print *, "xerr =", xerr, "ferr =", ferr
+
+	print *, "SingleRoot"
+	p0 = 1
+	p1 = 0
+	p2 = 0
+	p3 = 2
+	x1true = -1.25992104989487
+	x2true = 0
+	x3true = 0
+	nroots_true = 1
+	nroots_true_with_repeats = 1
+	call cubicroots(p0, p1, p2, p3, x1, x2, x3, nroots)
+	if (nroots < nroots_true .or. nroots > nroots_true_with_repeats) then
+		print *, "bad nroots = ", nroots
+	end if
+	xerr = ZERO
+	ferr = ZERO
+	if (nroots >= 1) then
+		xerr = max(xerr, x1 - x1true)
+		ferr = max(ferr, p0 * x1**3 + p1 * x1 ** 2 + p2 * x1 + p3)
+	end if
+	if (nroots >= 2) then
+		xerr = max(xerr, x2 - x2true)
+		ferr = max(ferr, p0 * x2**3 + p1 * x2**2 + p2 * x2 + p3)
+	end if
+	if (nroots >= 3) then
+		xerr = max(xerr, x3 - x3true)
+		ferr = max(ferr, p0 * x3**3 + p1 * x3 ** 2 + p2 * x3 + p3)
+	end if
+	print *, "xerr =", xerr, "ferr =", ferr
+
+	print *, "DoubleRoot"
+	p0 = 1
+	p1 = -1
+	p2 = -1
+	p3 = 1
+	x1true = -1
+	x2true = 1
+	x3true = 1
+	nroots_true = 2
+	nroots_true_with_repeats = 3
+	call cubicroots(p0, p1, p2, p3, x1, x2, x3, nroots)
+	if (nroots < nroots_true .or. nroots > nroots_true_with_repeats) then
+		print *, "bad nroots = ", nroots
+	end if
+	xerr = ZERO
+	ferr = ZERO
+	if (nroots >= 1) then
+		xerr = max(xerr, x1 - x1true)
+		ferr = max(ferr, p0 * x1**3 + p1 * x1 ** 2 + p2 * x1 + p3)
+	end if
+	if (nroots >= 2) then
+		xerr = max(xerr, x2 - x2true)
+		ferr = max(ferr, p0 * x2**3 + p1 * x2**2 + p2 * x2 + p3)
+	end if
+	if (nroots >= 3) then
+		xerr = max(xerr, x3 - x3true)
+		ferr = max(ferr, p0 * x3**3 + p1 * x3 ** 2 + p2 * x3 + p3)
+	end if
+	print *, "xerr =", xerr, "ferr =", ferr
+
+	print *, "Quadratic"
+	p0 = 0
+	p1 = 2
+	p2 = 0
+	p3 = -1
+	x1true = -0.707106781186548
+	x2true = 0.707106781186548
+	x3true = 0
+	nroots_true = 2
+	nroots_true_with_repeats = 2
+	call cubicroots(p0, p1, p2, p3, x1, x2, x3, nroots)
+	if (nroots < nroots_true .or. nroots > nroots_true_with_repeats) then
+		print *, "bad nroots = ", nroots
+	end if
+	xerr = ZERO
+	ferr = ZERO
+	if (nroots >= 1) then
+		xerr = max(xerr, x1 - x1true)
+		ferr = max(ferr, p0 * x1**3 + p1 * x1 ** 2 + p2 * x1 + p3)
+	end if
+	if (nroots >= 2) then
+		xerr = max(xerr, x2 - x2true)
+		ferr = max(ferr, p0 * x2**3 + p1 * x2**2 + p2 * x2 + p3)
+	end if
+	if (nroots >= 3) then
+		xerr = max(xerr, x3 - x3true)
+		ferr = max(ferr, p0 * x3**3 + p1 * x3 ** 2 + p2 * x3 + p3)
+	end if
+	print *, "xerr =", xerr, "ferr =", ferr
+
+
+	print *, "************** END TESTCUBIC **************"
+end subroutine testcubic
+
+subroutine testchol()
+	! Tests for Cholesky routines (cholsafe, cholsolve)
+
+	! Common modules
+    use, non_intrinsic :: consts_mod, only : RP, IK, ZERO, ONE, DEBUGGING
+    use, non_intrinsic :: debug_mod, only : assert
+    use, non_intrinsic :: linalg_mod, only : issymmetric
+
+	implicit none
+
+	integer(IK), parameter :: n = 3
+	real(RP), parameter :: thresh = 1.0E-7
+
+	real(RP) :: A(n, n), L(n, n), Aorig(n, n), b(n), borig(n), v(n), vtrue(n), xtrue(n)
+	real(RP) :: delta, delta_true, err
+	integer(IK) :: status
+	integer(IK) :: i, j
+
+	print *, "************** TESTCHOL **************"
+
+	A = reshape([10.5, 2.5, 3.5, 2.5, 50.0, 6.0, 3.5, 6.0, 90.0], [n,n])
+	Aorig = A
+	L = transpose(reshape([3.24037035, 2.5, 3.5, 0.77151675, 7.0288521, 6.0, 1.08012345, 0.7350655, 9.39643614], [n,n]))
+
+	delta_true = ZERO
+	vtrue = ZERO
+	call cholsafe(A, v, delta, status)
+	print *, "CHOLSAFE - case 1"
+	print *, "status (expect 0) = ", status
+	!print *, "L = "
+	!call printmat(A)
+	!print *, "Ltrue = "
+	!call printmat(L)
+	print *, "L err = ", maxval(abs(A - L))
+	print *, "delta err = ", abs(delta - delta_true)
+	print *, "v err = ", maxval(abs(v - vtrue))
+
+	print *, "CHOLSOLVE - case 1"
+	b = (/ 1.0, -1.0, 3.0 /)
+	xtrue = (/ 8376.0 / 91604.0, -2599.0 / 91604.0, 2901.0 / 91604.0 /)
+	call cholsolve(A, b)
+	print *, "x err = ", maxval(abs(b - xtrue))
+
+	print *, "CHOLSAFE - case 2"
+	A = Aorig
+	A(2, 2) = -50.0
+	vtrue = (/ -0.23809524, 1.0, 0.0 /)
+	delta_true = 50.595238095238095
+	!call printmat(A)
+	call cholsafe(A, v, delta, status)
+	print *, "status (expect 2) = ", status
+	print *, "delta err = ", abs(delta - delta_true)
+	print *, "v err = ", maxval(abs(v - vtrue))
+
+	print *, "************** END TESTCHOL **************"
+end subroutine testchol
+
 subroutine trsunc(delta, g_in, hess_in, lambda, s)
     use, non_intrinsic :: consts_mod, only : RP
 
@@ -1441,6 +1999,10 @@ subroutine trsunc(delta, g_in, hess_in, lambda, s)
     real(RP), intent(out) :: s(:)  ! S(N)
 
     call trglob(delta, g_in, hess_in, lambda, s, .true.)
+
+	!call testchol()
+	!call testquad()
+	!call testcubic()
 end subroutine trsunc
 
 subroutine arcunc(delta, g_in, hess_in, lambda, s)
