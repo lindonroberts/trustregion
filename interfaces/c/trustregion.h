@@ -65,7 +65,7 @@
 */
 void f_trsunc(
     const int n, 
-    const double* delta,
+    const double delta,
     const double* g,
     const double* hess,
     double* lambda,
@@ -85,7 +85,6 @@ void f_trsunc(
 * - g = vector of length n
 * - hess = array of length n*n storing symmetric H in row/column-major ordering
 *          (both orderings are equivalent for symmetric matrices)
-* - lambda = Lagrange multiplier at solution, >= 0
 * - s = global minimizer of length n
 * 
 * This function implements the algorithm from
@@ -95,10 +94,9 @@ void f_trsunc(
 */
 void f_arcunc(
     const int n, 
-    const double* delta,
+    const double delta,
     const double* g,
     const double* hess,
-    double* lambda,
     double* s
 );
 
@@ -132,10 +130,10 @@ void f_arcunc(
 */
 void f_trsapp(
     const int n, 
-    const double* delta,
+    const double delta,
     const double* g,
     const double* hess,
-    const double* tol,
+    const double tol,
     double* crvmin,
     double* s,
     int* info
@@ -157,8 +155,8 @@ void f_trsapp(
 *          (both orderings are equivalent for symmetric matrices)
 * - sl = lower bounds, array of length n
 * - su = upper bounds, array of length n
-* - tol = strictly positive termination tolerance
 * - xopt = base point for bound constraints, array of length n
+* - tol = strictly positive termination tolerance
 * - crvmin = estimate of minimum eigehvalue of H (based on observed iterates)
 * - s = approximate global minimizer of length n
 * 
@@ -171,13 +169,13 @@ void f_trsapp(
 */
 void f_trsbox(
     const int n, 
-    const double* delta,
+    const double delta,
     const double* g,
     const double* hess,
     const double* sl,
     const double* su,
-    const double* tol,
     const double* xopt,
+    const double tol,
     double* crvmin,
     double* s
 );
@@ -192,18 +190,16 @@ void f_trsbox(
 * 
 * Inputs are:
 * - n = dimension of problem
+* - delta = non-negative trust-region radius
+* - g = vector of length n
+* - hess = array of length n*n storing symmetric H in row/column-major ordering
+*          (both orderings are equivalent for symmetric matrices)
 * - m = number of linear inequality constraints
 * - amat = constraint LHS matrix, array of length m*n in C-style memory layout (row-major ordering)
 *          i.e. A(0, :) = [amat[0], ..., amat[n-1]], and A(1, :) = [amat[n], ..., amat[2*n-1]], etc.
 *          or A(i, j) = amat[i * n + j] for row index i=0, ..., m-1 and column index j=0, ..., n-1
 * - bvec = constraint RHS vector, array of length m
 * - xopt = base point for constraint, array of length n
-* - delta = non-negative trust-region radius
-* - g = vector of length n
-* - hess = array of length n*n storing symmetric H in row/column-major ordering
-*          (both orderings are equivalent for symmetric matrices)
-* - sl = lower bounds, array of length n
-* - su = upper bounds, array of length n
 * - tol = strictly positive termination tolerance
 * - s = approximate global minimizer of length n
 * 
@@ -216,14 +212,14 @@ void f_trsbox(
 */
 void f_trslin(
     const int n, 
+    const double delta,
+    const double* g,
+    const double* hess,
     const int m, 
     const double* amat,
     const double* bvec,
     const double* xopt,
-    const double* delta,
-    const double* g,
-    const double* hess,
-    const double* tol,
+    const double tol,
     double* s
 );
 

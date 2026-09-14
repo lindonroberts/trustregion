@@ -15,11 +15,10 @@ module trustregion_mod
             real(RP), intent(out) :: s(:)  ! S(N)
         end subroutine trsunc
 
-        module subroutine arcunc(delta, g_in, hess_in, lambda, s)
+        module subroutine arcunc(delta, g_in, hess_in, s)
             real(RP), intent(in) :: delta
             real(RP), intent(in) :: g_in(:)  ! G_IN(N)
             real(RP), intent(in) :: hess_in(:, :)  ! HESS_IN(N, N)
-            real(RP), intent(out) :: lambda
             real(RP), intent(out) :: s(:)  ! S(N)
         end subroutine arcunc
 

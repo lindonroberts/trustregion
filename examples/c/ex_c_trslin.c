@@ -58,7 +58,7 @@ int main()
         bvec[n + i] = -sl[i];
     }
 
-    f_trslin(n, m, amat, bvec, xbase, &delta, g, hess, &tol, s);
+    f_trslin(n, delta, g, hess, m, amat, bvec, xbase, tol, s);
 
     printf("TRSLIN calculated original step\n");
     printf("s = [%e, %e, %e]\n", s[0], s[1], s[2]);
@@ -69,7 +69,7 @@ int main()
     for (i = 0; i < n; ++i) amat[(m-1) * n + i] = -1.0;
     bvec[m-1] = -3.0;
 
-    f_trslin(n, m, amat, bvec, xbase, &delta, g, hess, &tol, s);
+    f_trslin(n, delta, g, hess, m, amat, bvec, xbase, tol, s);
 
     printf("TRSLIN calculated modified step\n");
     printf("s = [%e, %e, %e]\n", s[0], s[1], s[2]);

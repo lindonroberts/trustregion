@@ -15,7 +15,6 @@ int main()
 
     const int n = 3;
     double delta;
-    double lambda;
     double* g;
     double* hess;
     double* s;
@@ -32,28 +31,25 @@ int main()
 
     delta = 1.0;
 
-    f_arcunc(n, &delta, g, hess, &lambda, s);
+    f_arcunc(n, delta, g, hess, s);
 
     printf("ARCUNC easy case\n");
     printf("s = [%e, %e, %e]\n", s[0], s[1], s[2]);
-    printf("lambda = %e\n", lambda);
-    printf("Note: global min is s = (-2.4827526, 0, 1.0418972) with lambda=2.6925100\n");
+    printf("Note: global min is s = (-2.4827526, 0, 1.0418972)\n");  // lambda=2.6925100
 
     g[0] = 0.0; g[1] = 2.0; g[2] = 0.0;
-    f_arcunc(n, &delta, g, hess, &lambda, s);
+    f_arcunc(n, delta, g, hess, s);
 
     printf("ARCUNC hard case\n");
     printf("s = [%e, %e, %e]\n", s[0], s[1], s[2]);
-    printf("lambda = %e\n", lambda);
-    printf("Note: global min is s = (+/-1.62917555, -0.48507125, -/+1.27203396) with lambda=2.1231056\n");
+    printf("Note: global min is s = (+/-1.62917555, -0.48507125, -/+1.27203396)\n");  //  lambda=2.1231056
 
     g[0] = 0.0; g[1] = 2.0; g[2] = 0.0001;
-    f_arcunc(n, &delta, g, hess, &lambda, s);
+    f_arcunc(n, delta, g, hess, s);
     
     printf("ARCUNC nearly hard case\n");
     printf("s = [%e, %e, %e]\n", s[0], s[1], s[2]);
-    printf("lambda = %e\n", lambda);
-    printf("Note: global min is s = (1.62920031, -0.48506775, -1.27205329) with lambda=2.1231354\n");
+    printf("Note: global min is s = (1.62920031, -0.48506775, -1.27205329)\n"); // lambda=2.1231354
 
     free(g);
     free(hess);

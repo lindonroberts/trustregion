@@ -39,7 +39,7 @@ int main()
 
     printf("started\n");
 
-    f_trsapp(n, &delta, g, hess, &tol, &crvmin, s, &info);
+    f_trsapp(n, delta, g, hess, tol, &crvmin, s, &info);
 
     printf("TRSAPP calculated step\n");
     printf("s = [%e, %e, %e]\n", s[0], s[1], s[2]);

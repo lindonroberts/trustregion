@@ -2005,7 +2005,7 @@ subroutine trsunc(delta, g_in, hess_in, lambda, s)
 	!call testcubic()
 end subroutine trsunc
 
-subroutine arcunc(delta, g_in, hess_in, lambda, s)
+subroutine arcunc(delta, g_in, hess_in, s)
     use, non_intrinsic :: consts_mod, only : RP
 
     implicit none
@@ -2016,8 +2016,10 @@ subroutine arcunc(delta, g_in, hess_in, lambda, s)
     real(RP), intent(in) :: hess_in(:, :)  ! HESS_IN(N, N)
 
     ! Outputs
-    real(RP), intent(out) :: lambda
     real(RP), intent(out) :: s(:)  ! S(N)
+
+	! Local
+	real(RP) :: lambda
 
     call trglob(delta, g_in, hess_in, lambda, s, .false.)
 end subroutine arcunc

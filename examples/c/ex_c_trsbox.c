@@ -46,7 +46,7 @@ int main()
     delta = 1.0;
     tol = 1.0e-2;
 
-    f_trsbox(n, &delta, g, hess, sl, su, &tol, xbase, &crvmin, s);
+    f_trsbox(n, delta, g, hess, sl, su, xbase, tol, &crvmin, s);
 
     printf("TRSBOX calculated step\n");
     printf("s = [%e, %e, %e]\n", s[0], s[1], s[2]);

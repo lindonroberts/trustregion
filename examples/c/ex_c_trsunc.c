@@ -5,7 +5,7 @@
 int main()
 {
     /*
-    * TRSAPP (unconstrained trust-region subproblem using CG) example
+    * ARCUNC (global unconstrained trust-region subproblem) example
     * Example comes from [GRT2010] 
     * 
     * [GRT2010] N. I. M. Gould, D. P. Robinson, H. S. Thorne. On solving trust-region and other 
@@ -32,7 +32,7 @@ int main()
 
     delta = 1.0;
 
-    f_trsunc(n, &delta, g, hess, &lambda, s);
+    f_trsunc(n, delta, g, hess, &lambda, s);
 
     printf("TRSUNC easy case\n");
     printf("s = [%e, %e, %e]\n", s[0], s[1], s[2]);
@@ -40,7 +40,7 @@ int main()
     printf("Note: global min is s = (-1, 0, 0) with lambda=4\n");
 
     g[0] = 0.0; g[1] = 2.0; g[2] = 0.0;
-    f_trsunc(n, &delta, g, hess, &lambda, s);
+    f_trsunc(n, delta, g, hess, &lambda, s);
 
     printf("TRSUNC hard case\n");
     printf("s = [%e, %e, %e]\n", s[0], s[1], s[2]);
@@ -48,7 +48,7 @@ int main()
     printf("Note: global min is s = (+/-0.68926566, -0.48507125, -/+0.53816237) with lambda=2.1231056\n");
 
     g[0] = 0.0; g[1] = 2.0; g[2] = 0.0001;
-    f_trsunc(n, &delta, g, hess, &lambda, s);
+    f_trsunc(n, delta, g, hess, &lambda, s);
     
     printf("TRSUNC nearly hard case\n");
     printf("s = [%e, %e, %e]\n", s[0], s[1], s[2]);
