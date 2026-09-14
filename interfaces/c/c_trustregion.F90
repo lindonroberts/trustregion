@@ -12,20 +12,13 @@ contains
         integer(c_int), value :: n
         real(c_double), intent(in) :: delta
         real(c_double), intent(in) :: g_in(n)
-        real(c_double), intent(in) :: hess_in(n * n)
+        real(c_double), intent(in), target :: hess_in(n * n)
         real(c_double), intent(out) :: lambda
         real(c_double), intent(out) :: s(n)
 
-        ! Locals
-        integer(c_int) :: i, j
-        real(c_double) :: hess(n, n)
-
-        ! Convert c-style array hess_in to Fortran matrix
-        do i = 1, n 
-            do j = 1, n 
-                hess(i, j) = hess_in((i-1) * n + j)
-            end do
-        end do
+        ! Rank remap hess_in(n*n) to hess(n,n) without allocating new memory
+        real(c_double), pointer, contiguous :: hess(:, :)
+        hess(1:n, 1:n) => hess_in(:)
 
         call trsunc(delta, g_in, hess, lambda, s)
     end subroutine c_trsunc
@@ -35,20 +28,13 @@ contains
         integer(c_int), value :: n
         real(c_double), intent(in) :: delta
         real(c_double), intent(in) :: g_in(n)
-        real(c_double), intent(in) :: hess_in(n * n)
+        real(c_double), intent(in), target :: hess_in(n * n)
         real(c_double), intent(out) :: lambda
         real(c_double), intent(out) :: s(n)
 
-        ! Locals
-        integer(c_int) :: i, j
-        real(c_double) :: hess(n, n)
-
-        ! Convert c-style array hess_in to Fortran matrix
-        do i = 1, n 
-            do j = 1, n 
-                hess(i, j) = hess_in((i-1) * n + j)
-            end do
-        end do
+        ! Rank remap hess_in(n*n) to hess(n,n) without allocating new memory
+        real(c_double), pointer, contiguous :: hess(:, :)
+        hess(1:n, 1:n) => hess_in(:)
 
         call arcunc(delta, g_in, hess, lambda, s)
     end subroutine c_arcunc
@@ -58,22 +44,15 @@ contains
         integer(c_int), value :: n
         real(c_double), intent(in) :: delta
         real(c_double), intent(in) :: g_in(n)
-        real(c_double), intent(in) :: hess_in(n * n)
+        real(c_double), intent(in), target :: hess_in(n * n)
         real(c_double), intent(in) :: tol
         real(c_double), intent(out) :: crvmin
         real(c_double), intent(out) :: s(n)
         integer(c_int), intent(out) :: info
 
-        ! Locals
-        integer(c_int) :: i, j
-        real(c_double) :: hess(n, n)
-
-        ! Convert c-style array hess_in to Fortran matrix
-        do i = 1, n 
-            do j = 1, n 
-                hess(i, j) = hess_in((i-1) * n + j)
-            end do
-        end do
+        ! Rank remap hess_in(n*n) to hess(n,n) without allocating new memory
+        real(c_double), pointer, contiguous :: hess(:, :)
+        hess(1:n, 1:n) => hess_in(:)
 
         !print *, "calling trsapp..."
         !print *, "delta = ", delta
@@ -99,7 +78,7 @@ contains
         integer(c_int), value :: n
         real(c_double), intent(in) :: delta
         real(c_double), intent(in) :: g_in(n)
-        real(c_double), intent(in) :: hess_in(n * n)
+        real(c_double), intent(in), target :: hess_in(n * n)
         real(c_double), intent(in) :: sl(n)
         real(c_double), intent(in) :: su(n)
         real(c_double), intent(in) :: tol
@@ -107,16 +86,9 @@ contains
         real(c_double), intent(out) :: crvmin
         real(c_double), intent(out) :: s(n)
 
-        ! Locals
-        integer(c_int) :: i, j
-        real(c_double) :: hess(n, n)
-
-        ! Convert c-style array hess_in to Fortran matrix
-        do i = 1, n 
-            do j = 1, n 
-                hess(i, j) = hess_in((i-1) * n + j)
-            end do
-        end do
+        ! Rank remap hess_in(n*n) to hess(n,n) without allocating new memory
+        real(c_double), pointer, contiguous :: hess(:, :)
+        hess(1:n, 1:n) => hess_in(:)
 
         call trsbox(delta, g_in, hess, sl, su, tol, xopt, crvmin, s)
     end subroutine c_trsbox
@@ -125,32 +97,27 @@ contains
         bind(C, name="f_trslin")
         integer(c_int), value :: n
         integer(c_int), value :: m
-        real(c_double), intent(in) :: amat_in(n * m)
+        real(c_double), intent(in), target :: amat_in(n * m)
         real(c_double), intent(in) :: bvec_in(m)
         real(c_double), intent(in) :: xopt(n)
         real(c_double), intent(in) :: delta
         real(c_double), intent(in) :: g_in(n)
-        real(c_double), intent(in) :: hess_in(n * n)
+        real(c_double), intent(in), target :: hess_in(n * n)
         real(c_double), intent(in) :: tol
         real(c_double), intent(out) :: s(n)
 
-        ! Locals
-        integer(c_int) :: i, j
-        real(c_double) :: hess(n, n)
-        real(c_double) :: amat(n, m)
+        ! Rank remap hess_in(n*n) to hess(n,n) without allocating new memory
+        ! ...and amat(n*m) to amat(n,m)
+        real(c_double), pointer, contiguous :: hess(:, :)
+        real(c_double), pointer, contiguous :: amat(:, :)
+        hess(1:n, 1:n) => hess_in(:)
+        amat(1:n, 1:m) => amat_in(:)
 
-        ! Convert c-style array hess_in to Fortran matrix
-        do i = 1, n 
-            do j = 1, n 
-                hess(i, j) = hess_in((i-1) * n + j)
-            end do
-        end do
-
-        do i = 1, n 
-            do j = 1, m
-                amat(i, j) = amat_in((i-1) * n + j)
-            end do
-        end do
+        !do i = 1, n 
+        !    do j = 1, m
+        !        amat(i, j) = amat_in((i-1) * n + j)
+        !    end do
+        !end do
 
         call trslin(amat, bvec_in, xopt, delta, g_in, hess, tol, s)
     end subroutine c_trslin

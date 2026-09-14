@@ -82,7 +82,7 @@ subroutine trglob(delta, g_in, hess_in, lambda, x, is_tr)
 	real(RP) :: lambda_plus, lambda1_neg1, lambda3_2
 	real(RP) :: old_lambdaC
 	real(RP) :: lambda_width
-	logical, parameter :: verbose = .true.
+	logical, parameter :: verbose = .false.
 
 	! Solver parameters
 	real(RP), parameter :: gamma = 1.0  ! for setting initial lambda (eq 3.51), value taken from GALAHAD/trs.f90
