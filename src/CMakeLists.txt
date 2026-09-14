@@ -27,11 +27,9 @@ target_compile_definitions (trustregion PUBLIC "PRIMA_INTEGER_KIND=${PRIMA_INTEG
 set_target_properties(trustregion PROPERTIES
   POSITION_INDEPENDENT_CODE ON
   Fortran_PREPROCESS ON
-  Fortran_MODULE_DIRECTORY mod)
+  Fortran_MODULE_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/modules)
 target_include_directories (trustregion PRIVATE prima_common)
-target_include_directories (trustregion PUBLIC
-  $<INSTALL_INTERFACE:include/prima/mod>
-  $<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}/mod>)
+target_include_directories (trustregion PUBLIC ${CMAKE_CURRENT_BINARY_DIR}/modules)
 
 # because of calcfc_internal nested subroutine in cobylb.f90
 if (HAVE_WARN_EXECSTACK)
@@ -65,4 +63,4 @@ if (WIN32)
   set_target_properties(trustregion PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${PROJECT_BINARY_DIR}/bin)
 endif()
 
-install (DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/mod DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/trustregion)
+install (DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/modules DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/trustregion)
