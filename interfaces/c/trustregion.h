@@ -70,6 +70,10 @@
 #ifndef TRUSTREGION_H
 #define TRUSTREGION_H
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 /*
 * Globally solve the (unconstrained) trust-region subproblem
 *   min_{s \in R^n} g^T * s + 0.5 * s^T * H * s
@@ -251,5 +255,9 @@ void f_trslin(
     const double tol,
     double* s
 );
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

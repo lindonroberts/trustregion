@@ -1,0 +1,37 @@
+[build-system]
+requires = ["scikit-build-core", "pybind11", "numpy"]
+build-backend = "scikit_build_core.build"
+
+
+[project]
+name = "trustregion"
+version = "0.1.0"
+description="Trust region subproblem solvers for nonlinear optimization"
+readme = "README.md"
+authors = [
+  { name = "Lindon Roberts", email = "lindon.roberts@unimelb.edu.au" },
+]
+dependencies = [
+    "numpy"
+]
+keywords = ["mathematics", "optimization"]
+requires-python = ">=3.9"
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Intended Audience :: Science/Research",
+  "License :: OSI Approved :: BSD License",
+  "Programming Language :: Python :: 3 :: Only",
+  "Programming Language :: Python :: 3.9",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Topic :: Scientific/Engineering",
+  "Topic :: Scientific/Engineering :: Mathematics"
+]
+
+[tool.scikit-build]
+cmake.args = ["-DBUILD_SHARED_LIBS=OFF", "-DTRUSTREGION_ENABLE_PYTHON=ON"]
+build.verbose = true
+logging.level = "INFO"
+install.components = ["trustregion_python_c_ext"]

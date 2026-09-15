@@ -2,7 +2,7 @@ add_library(trustregion_c_api
     c_trustregion.F90
 )
 
-set(HEADERFILE trustregion.h)
+set(HEADERFILE "${CMAKE_CURRENT_SOURCE_DIR}/trustregion.h")
 
 set_target_properties(trustregion_c_api PROPERTIES
     PUBLIC_HEADER ${HEADERFILE}
@@ -19,4 +19,4 @@ target_include_directories(trustregion_c_api
 )
 
 install(TARGETS trustregion_c_api)
-install(FILES ${HEADERFILE} DESTINATION include)
+install(FILES ${HEADERFILE} DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/trustregion)
