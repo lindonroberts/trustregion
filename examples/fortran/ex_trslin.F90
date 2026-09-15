@@ -35,7 +35,7 @@ do i = 1, n
     bvec(n+i) = -sl(i)
 end do
 
-call trslin(amat, bvec, xbase, delta, g, hess, tol, s)
+call trslin(delta, g, hess, amat, bvec, xbase, tol, s)
 
 print *, "TRSLIN calculated original step s ="
 print *, s
@@ -46,7 +46,7 @@ print *, s
 amat(:, m) = -1.0
 bvec(m) = -3.0
 
-call trslin(amat, bvec, xbase, delta, g, hess, tol, s)
+call trslin(delta, g, hess, amat, bvec, xbase, tol, s)
 
 print *, "TRSLIN calculated modified step s ="
 print *, s

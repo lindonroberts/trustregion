@@ -16,7 +16,7 @@ implicit none
 contains
 
 
-subroutine trsbox(delta, g_in, hess_in, sl, su, tol, xopt, crvmin, d)
+subroutine trsbox(delta, g_in, hess_in, sl, su, xopt, tol, crvmin, d)
 !--------------------------------------------------------------------------------------------------!
 ! This subroutine approximately solves
 ! minimize Q(XOPT + D) subject to ||D|| <= DELTA, SL <= XOPT + D <= SU.
@@ -65,8 +65,8 @@ real(RP), intent(in) :: g_in(:)  ! G_IN(N)
 real(RP), intent(in) :: hess_in(:, :)  ! HESS_IN(N, N)
 real(RP), intent(in) :: sl(:)  ! SL(N)
 real(RP), intent(in) :: su(:)  ! SU(N)
-real(RP), intent(in) :: tol
 real(RP), intent(in) :: xopt(:)  ! XOPT(N)
+real(RP), intent(in) :: tol
 
 ! Outputs
 real(RP), intent(out) :: crvmin

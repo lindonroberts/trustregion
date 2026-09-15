@@ -19,7 +19,7 @@ implicit none
 contains
 
 
-subroutine trslin(amat_in, bvec_in, xopt, delta, g_in, hess_in, tol, s)
+subroutine trslin(delta, g_in, hess_in, amat_in, bvec_in, xopt, tol, s)
 !--------------------------------------------------------------------------------------------------!
 ! This subroutine solves
 !       minimize Q(XOPT + D)  s.t. ||D|| <= DELTA, AMAT^T*(XOPT+D) <= B.
@@ -55,12 +55,12 @@ use, non_intrinsic :: getact_mod, only : getact
 implicit none
 
 ! Inputs
-real(RP), intent(in) :: amat_in(:, :)  ! AMAT_IN(N, M)
-real(RP), intent(in) :: bvec_in(:)  ! BVEC_IN(M)
-real(RP), intent(in) :: xopt(:)  ! XOPT(N)
 real(RP), intent(in) :: delta
 real(RP), intent(in) :: g_in(:)  ! G_IN(N)
 real(RP), intent(in) :: hess_in(:, :)  ! HESS_IN(N, N)
+real(RP), intent(in) :: amat_in(:, :)  ! AMAT_IN(N, M)
+real(RP), intent(in) :: bvec_in(:)  ! BVEC_IN(M)
+real(RP), intent(in) :: xopt(:)  ! XOPT(N)
 real(RP), intent(in) :: tol
 
 ! Outputs

@@ -111,7 +111,7 @@ contains
         delta_ref = delta
         tol_ref = tol
 
-        call trsbox(delta_ref, g_in, hess, sl, su, tol_ref, xopt, crvmin, s)
+        call trsbox(delta_ref, g_in, hess, sl, su, xopt, tol_ref, crvmin, s)
     end subroutine c_trsbox
 
     subroutine c_trslin(n, delta, g_in, hess_in, m, amat_in, bvec_in, xopt, tol, s) & 
@@ -146,7 +146,7 @@ contains
         !    end do
         !end do
 
-        call trslin(amat, bvec_in, xopt, delta_ref, g_in, hess, tol_ref, s)
+        call trslin(delta_ref, g_in, hess, amat, bvec_in, xopt, tol_ref, s)
     end subroutine c_trslin
 
 

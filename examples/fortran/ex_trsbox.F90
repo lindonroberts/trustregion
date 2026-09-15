@@ -26,7 +26,7 @@ su = (/ 1.0, 1.0, 1.0 /)
 delta = 1.0
 tol = 1.0E-2
 
-call trsbox(delta, g, hess, sl, su, tol, xbase, crvmin, s)
+call trsbox(delta, g, hess, sl, su, xbase, tol, crvmin, s)
 
 print *, "TRSBOX calculated step s ="
 print *, s
