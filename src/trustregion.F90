@@ -213,9 +213,9 @@ module trustregion_mod
         ! Approximately solve the linearly-constrained trust-region subproblem
         !   min_{s \in R^n} g^T * s + 0.5 * s^T * H * s
         !   s.t.  ||s||_2 <= delta
-        !         A * (xopt + s) <= bvec
+        !         amat^T * (xopt + s) <= bvec
         ! 
-        ! The code assumes that the point s=0 is feasible (i.e. A * xopt <= bvec)
+        ! The code assumes that the point s=0 is feasible (i.e. amat^T * xopt <= bvec)
         ! 
         ! Inputs are:
         ! - n = dimension of problem
@@ -224,9 +224,7 @@ module trustregion_mod
         ! - hess = array of length n*n storing symmetric H in row/column-major ordering
         !          (both orderings are equivalent for symmetric matrices)
         ! - m = number of linear inequality constraints
-        ! - amat = constraint LHS matrix, array of length m*n in C-style memory layout (row-major ordering)
-        !          i.e. A(0, :) = [amat[0], ..., amat[n-1]], and A(1, :) = [amat[n], ..., amat[2*n-1]], etc.
-        !          or A(i, j) = amat[i * n + j] for row index i=0, ..., m-1 and column index j=0, ..., n-1
+        ! - amat = constraint LHS matrix, of size n*m
         ! - bvec = constraint RHS vector, array of length m
         ! - xopt = base point for constraint, array of length n
         ! - tol = strictly positive termination tolerance
