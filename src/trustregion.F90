@@ -86,8 +86,7 @@ module trustregion_mod
         ! - n = dimension of problem
         ! - delta = non-negative trust-region radius
         ! - g = vector of length n
-        ! - hess = array of length n*n storing symmetric H in row/column-major ordering
-        !          (both orderings are equivalent for symmetric matrices)
+        ! - hess = symmetric matrix of size n*n
         ! - lambda = Lagrange multiplier at solution, >= 0
         ! - s = global minimizer of length n
         ! 
@@ -115,8 +114,7 @@ module trustregion_mod
         ! - n = dimension of problem
         ! - delta = non-negative regularization parameter
         ! - g = vector of length n
-        ! - hess = array of length n*n storing symmetric H in row/column-major ordering
-        !          (both orderings are equivalent for symmetric matrices)
+        ! - hess = symmetric matrix of size n*n
         ! - s = global minimizer of length n
         ! 
         ! This function implements the algorithm from
@@ -140,8 +138,7 @@ module trustregion_mod
         ! - n = dimension of problem
         ! - delta = non-negative trust-region radius
         ! - g = vector of length n
-        ! - hess = array of length n*n storing symmetric H in row/column-major ordering
-        !          (both orderings are equivalent for symmetric matrices)
+        ! - hess = symmetric matrix of size n*n
         ! - tol = strictly positive termination tolerance
         ! - crvmin = estimate of minimum eigenvalue of H (based on observed iterates)
         ! - s = approximate global minimizer of length n
@@ -181,8 +178,7 @@ module trustregion_mod
         ! - n = dimension of problem
         ! - delta = non-negative trust-region radius
         ! - g = vector of length n
-        ! - hess = array of length n*n storing symmetric H in row/column-major ordering
-        !          (both orderings are equivalent for symmetric matrices)
+        ! - hess = symmetric matrix of size n*n
         ! - sl = lower bounds, array of length n
         ! - su = upper bounds, array of length n
         ! - xopt = base point for bound constraints, array of length n
@@ -221,8 +217,7 @@ module trustregion_mod
         ! - n = dimension of problem
         ! - delta = non-negative trust-region radius
         ! - g = vector of length n
-        ! - hess = array of length n*n storing symmetric H in row/column-major ordering
-        !          (both orderings are equivalent for symmetric matrices)
+        ! - hess = symmetric matrix of size n*n
         ! - m = number of linear inequality constraints
         ! - amat = constraint LHS matrix, of size n*m
         ! - bvec = constraint RHS vector, array of length m
