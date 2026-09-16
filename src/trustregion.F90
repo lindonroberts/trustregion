@@ -143,7 +143,7 @@ module trustregion_mod
         ! - hess = array of length n*n storing symmetric H in row/column-major ordering
         !          (both orderings are equivalent for symmetric matrices)
         ! - tol = strictly positive termination tolerance
-        ! - crvmin = estimate of minimum eigehvalue of H (based on observed iterates)
+        ! - crvmin = estimate of minimum eigenvalue of H (based on observed iterates)
         ! - s = approximate global minimizer of length n
         ! - info = output information flag
         !          info = 0 --> approximate solution found
@@ -187,7 +187,7 @@ module trustregion_mod
         ! - su = upper bounds, array of length n
         ! - xopt = base point for bound constraints, array of length n
         ! - tol = strictly positive termination tolerance
-        ! - crvmin = estimate of minimum eigehvalue of H (based on observed iterates)
+        ! - crvmin = estimate of minimum eigenvalue of H (based on observed iterates)
         ! - s = approximate global minimizer of length n
         ! 
         ! This function implements a modified version of the active set/CG-Steihaug method
