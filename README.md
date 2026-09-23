@@ -52,7 +52,7 @@ It finds a global minimizer using the method from (GRT2010).
 
 The routine `trsbox` solves the bound-constrained trust region subproblem
 
-$$\min_{s\in\mathbb{R}^n} g^T s + \frac{1}{2} s^T H s, \qquad \text{subject to} \quad \|s\|_2 \leq \Delta, \: \text{and} \: s_l \leq x_{opt} + s \leq s_u, $$
+$$\min_{s\in\mathbb{R}^n} g^T s + \frac{1}{2} s^T H s, \qquad \text{subject to} \quad \|s\|_2 \leq \Delta, \quad s_l \leq x_{opt} + s \leq s_u, $$
 
 for vectors $g,s_l,x_{opt},s_u\in\mathbb{R}^n$, symmetric $n\times n$ matrix $H$ and radius $\Delta \geq 0$.
 The solver assumes that the point $s=0$ is feasible for the bound constraints (i.e. $s_l \leq x_{opt} \leq s_u$ holds).
@@ -62,7 +62,7 @@ It implements the active set conjugate gradient method from (Pow2009).
 
 The routine `trslin` solves the linearly constrained trust region subproblem (with $m$ linear inequality constraints)
 
-$$\min_{s\in\mathbb{R}^n} g^T s + \frac{1}{2} s^T H s, \qquad \text{subject to} \quad \|s\|_2 \leq \Delta, \: \text{and} \: A (x_{opt} + s) \leq b, $$
+$$\min_{s\in\mathbb{R}^n} g^T s + \frac{1}{2} s^T H s, \qquad \text{subject to} \quad \|s\|_2 \leq \Delta, \quad A (x_{opt} + s) \leq b, $$
 
 for vectors $g,x_{opt},s_u\in\mathbb{R}^n$ and $b\in\mathbb{R}^m$, symmetric $n\times n$ matrix $H$, $m\times n$ matrix $A$ and radius $\Delta \geq 0$.
 The solver assumes that the point $s=0$ is feasible for the bound constraints (i.e. $A x_{opt} \leq b$ holds).
@@ -80,16 +80,18 @@ The call definitions for the 5 solvers are given in `src/trustregion.F90` (Fortr
 Python examples for each of the 5 solvers are available in the `examples/python` directory.
 The full interfaces for the solvers are:
 
+    import trustregion
+    
     # Unconstrained trust region subproblem
-    s = trustregion.arcunc(delta, g, H)
+    s, lda = trustregion.trsunc(delta, g, H)
     s, crvmin, info = trustregion.trsapp(delta, g, H, tol=1e-2)
-
+    
     # Cubic regularization subproblem
     s = trustregion.arcunc(delta, g, H)
-
+    
     # Bound constrained trust region subproblem
     s, crvmin = trustregion.trsbox(delta, g, H, sl, su, xopt, tol=1e-2)
-
+    
     # Linearly constrained trust region subproblem
     s = trustregion.trslin(delta, g, H, A, b, xopt, tol=1e-2)
 
@@ -97,6 +99,15 @@ where all vector/matrix inputs are NumPy arrays (of compatible dimensions), and 
 
 The output `crvmin` (type `float`) from `trsapp` and `trsbox` is an estimate of the smallest eigenvalue of `H` based on the observed sequence of iterates.
 The output `info` from `trsapp` is a termination flag (`info == 0` is standard termination, `info > 0` for termination due to slow progress, and `info < 0` for termination due to rounding errors).
+
+The package also provides a unified interface to all solvers
+
+    import trustregion
+    s = trustregion.solve(delta, g, H, 
+                          sl=None, su=None, xopt=None, A=None, b=None, 
+                          tol=1e-2, solve_global=False, subproblem='tr')
+
+where the inputs have the same meaning as for the individual solvers, except for the flag `solve_global` (used to select either `trsapp` or `trsunc` for unconstrained trust region subproblems) and the input `subproblem` which is either `'tr'` or `'cr'` depending on whether you wish to solve the trust region or cubic regularization subproblem.
 
 ## References
 
