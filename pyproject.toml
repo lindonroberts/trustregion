@@ -34,4 +34,4 @@ classifiers = [
 cmake.args = ["-DBUILD_SHARED_LIBS=OFF", "-DTRUSTREGION_ENABLE_PYTHON=ON"]
 build.verbose = true
 logging.level = "INFO"
-install.components = ["trustregion_python_c_ext"]
+install.components = ["trustregion_python", "trustregion_python_c_ext"]
