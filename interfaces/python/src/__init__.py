@@ -384,6 +384,9 @@ def solve(delta, g, H, sl=None, su=None, A=None, b=None, xopt=None, tol=1e-2, so
         s.t.  ||s||_2 <= delta
               Optional: sl <= xopt + s <= su   --OR--   A @ (xopt + s) <= b
     
+    Note: the point xopt must be chosen so that s=0 is feasible
+    (i.e. sl <= xopt <= su or A @ xopt <= b must hold)
+    
     If solve_global=False or bound/linear constraints are provided, the function returns an approximate
     solution with the termination tolerance 'tol'. If solve_global=True and no bound/linear constraints are
     provided, a global minimizer is calculated.
@@ -391,7 +394,7 @@ def solve(delta, g, H, sl=None, su=None, A=None, b=None, xopt=None, tol=1e-2, so
     If subproblem=='cr', this globally solves the unconstrained cubic regularization problem:
         min_{s in R^n} g^T * s + 0.5 * s^T * H * s + (delta/3) * ||s||_2^3
     
-    The global solver is best suited to small/medium scale problems (e.g. n <= 500).
+    The global solvers are best suited to small/medium scale problems (e.g. n <= 500).
 
     Inputs are:
     - delta = non-negative trust-region radius
