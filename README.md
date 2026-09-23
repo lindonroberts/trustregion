@@ -10,7 +10,9 @@ For a mathematical background on trust region and cubic regularization methods, 
 
 ## Installation
 
-The main Fortran library and accompanying C interface can be built using [cmake](https://cmake.org/):
+To install `trustregion`, you must have access to a Fortran and C/C++ compiler (e.g. `gfortran` and `gcc` from the [GNU compiler collection](https://gcc.gnu.org/)), and the [cmake](https://cmake.org/) build system.
+
+The main Fortran library and accompanying C interface can be built using cmake:
 
     git clone https://github.com/lindonroberts/trustregion.git
     cd trustregion
@@ -24,6 +26,8 @@ The Python package can be installed using [pip](https://packaging.python.org/en/
     git clone https://github.com/lindonroberts/trustregion.git
     cd trustregion
     pip install .
+
+The Python package's only dependency is on NumPy.
 
 ## Available solvers
 
