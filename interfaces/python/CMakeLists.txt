@@ -49,4 +49,4 @@ message(WARNING "extra files ${SUPPORTING_PY_FILES}")
 #    list(APPEND SUPPORTING_PY_FILES "${TRUSTREGION_LINK_DIR}/libtrustregion.so")
 #endif()
 
-install (FILES ${SUPPORTING_PY_FILES} DESTINATION trustregion/)
+install (FILES ${SUPPORTING_PY_FILES} DESTINATION trustregion/ COMPONENT trustregion_python)
