@@ -4,9 +4,12 @@
 These are common subproblems that arise in nonlinear optimization.
 It is a newer version of the [trust-region](https://github.com/lindonroberts/trust-region/) Python package.
 
-The routines `trsapp`, `trsbox` and `trslin` are taken directly from [PRIMA](https://github.com/libprima/prima), which is made available under the same BSD-3 licence as the `trustregion` package.
-
 For a mathematical background on trust region and cubic regularization methods, see references (CGT2000), (NW2006), or (CGT2022) below.
+
+The routines `trsapp`, `trsbox` and `trslin` are taken directly from [PRIMA](https://github.com/libprima/prima), available under the same BSD-3 licence.
+These routines were originally implemented in Fortran 77 by [M. J. D. Powell](https://en.wikipedia.org/wiki/Michael_J._D._Powell) (University of Cambridge), with the modern Fortran 90 PRIMA implementation by [Zaikun Zhang](https://www.zhangzk.net/) (Sun Yat-sen University).
+The library packaging and the routines `trsunc` and `arcunc` were implemented by [Lindon Roberts](https://lindonroberts.github.io/) (University of Melbourne).
+See the per-routine details below for references to the mathematical descriptions of each algorithm.
 
 ## Installation
 
@@ -31,7 +34,7 @@ The Python package's only dependency is on NumPy.
 
 ## Available solvers
 
-**Unconstrained Trust Region Subproblem (trsunc, trsapp)**
+### Unconstrained Trust Region Subproblem (trsunc, trsapp)
 
 The routines `trsunc` and `trsapp` solve the unconstrained trust region subproblem
 
@@ -43,7 +46,7 @@ The solver `trsunc` finds a global minimizer and `trsapp` finds an approximate m
 The global solver `trsunc` implements the method from (GRT2010) and also returns a scalar $\lambda\geq 0$ such that $(H + \lambda I)s = -g$ (i.e. the Lagrange multiplier associated with the constraint $\|s\|_2^2 \leq \Delta^2$).
 The approximate solver `trsapp` implements the conjugate gradient-based method from (Pow2006).
 
-**Unconstrained Cubic Regularization Subproblem (arcunc)**
+### Unconstrained Cubic Regularization Subproblem (arcunc)
 
 The routine `arcunc` solves the cubic regularization subproblem
 
@@ -52,7 +55,7 @@ $$\min_{s\in\mathbb{R}^n} g^T s + \frac{1}{2} s^T H s + \frac{\Delta}{3} \|s\|_2
 for vector $g\in\mathbb{R}^n$, symmetric $n\times n$ matrix $H$ and radius $\Delta \geq 0$.
 It finds a global minimizer using the method from (GRT2010).
 
-**Bound Constrained Trust Region Subproblem (trsbox)**
+### Bound Constrained Trust Region Subproblem (trsbox)
 
 The routine `trsbox` solves the bound-constrained trust region subproblem
 
@@ -62,7 +65,7 @@ for vectors $g,s_l,x_{opt},s_u\in\mathbb{R}^n$, symmetric $n\times n$ matrix $H$
 The solver assumes that the point $s=0$ is feasible for the bound constraints (i.e. $s_l \leq x_{opt} \leq s_u$ holds).
 It implements the active set conjugate gradient method from (Pow2009).
 
-**Linearly Constrained Trust Region Subproblem (trslin)**
+### Linearly Constrained Trust Region Subproblem (trslin)
 
 The routine `trslin` solves the linearly constrained trust region subproblem (with $m$ linear inequality constraints)
 
