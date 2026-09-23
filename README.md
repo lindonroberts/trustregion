@@ -43,7 +43,7 @@ The approximate solver `trsapp` implements the conjugate gradient-based method f
 
 The routine `arcunc` solves the cubic regularization subproblem
 
-$$\min_{s\in\mathbb{R}^n} g^T s + \frac{1}{2} s^T H s +  \frac{\Delta}{3} ||s||_2^3, $$
+$$\min_{s\in\mathbb{R}^n} g^T s + \frac{1}{2} s^T H s + \frac{\Delta}{3} \|s\|_2^3, $$
 
 for vector $g\in\mathbb{R}^n$, symmetric $n\times n$ matrix $H$ and radius $\Delta \geq 0$.
 It finds a global minimizer using the method from (GRT2010).
